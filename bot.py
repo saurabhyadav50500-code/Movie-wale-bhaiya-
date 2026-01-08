@@ -1,8 +1,10 @@
 import random
 from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import API_ID, API_HASH, BOT_TOKEN
+from keep_alive import keep_alive  # <--- Ye line add karein
 
-# Bot Client का Initialization
+# Bot Client Initialization
 app = Client(
     "my_random_bot",
     api_id=API_ID,
@@ -10,29 +12,30 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-# Random Replies की लिस्ट
 REPLY_MESSAGES = [
-    "Hello",
-    "Hello cutie",
-    "Hello Mr",
-    "Hello guys",
-    "Kaise ho dear"
+    "Hello", "Hello cutie", "Hello Mr", "Hello guys", "Kaise ho dear"
 ]
 
-# Message Handler: जब भी कोई text message आए
+@app.on_message(filters.command("start"))
+async def start_command(client, message):
+    user_name = message.from_user.mention
+    txt = f"👋 Namaste **{user_name}**!\n\nMain ek Random Reply Bot hu. Mujhe **'hii'** likh kar bhejo!"
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/YourUsername")]
+    ])
+    await message.reply_text(text=txt, reply_markup=buttons)
+
 @app.on_message(filters.text)
 async def handle_message(client, message):
-    # User का message lowercase में convert करके check करते हैं
     user_text = message.text.lower()
-    
-    # अगर user ने "hii" भेजा है (exact match)
     if user_text == "hii":
-        # Randomly एक reply चुनें
         random_reply = random.choice(REPLY_MESSAGES)
-        
-        # Reply भेजें
         await message.reply_text(random_reply)
 
-# Bot को Start करें
 print("Bot start ho gaya hai...")
+
+# --- Server Start ---
+keep_alive()  # <--- Ye function call karein
+# --------------------
+
 app.run()
