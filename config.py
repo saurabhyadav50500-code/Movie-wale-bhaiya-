@@ -1,5 +1,5 @@
 # config.py
 
-API_ID = 1234567  # Yahan apna API ID dalein (Integer hona chahiye)
-API_HASH = "aapka_api_hash_yahan" # Yahan apna API HASH dalein
-BOT_TOKEN = "aapka_bot_token_yahan" # BotFather se mila hua token yahan dalein
+API_ID = 34119293  # Yahan apna API ID dalein (Integer hona chahiye)
+API_HASH = "ebea85e712484252c681be91348fdc85" # Yahan apna API HASH dalein
+BOT_TOKEN = "7956005223:AAGlqJdNnOizY-ijdcjldQsVEFYYP9LojPs" # BotFather se mila hua token yahan dalein
