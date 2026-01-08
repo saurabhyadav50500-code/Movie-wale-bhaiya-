@@ -1,31 +1,8 @@
-# bot.py
 from pyrogram import Client, filters
-import random
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import API_ID, API_HASH, BOT_TOKEN
-from flask import Flask
-import threading
-import os
 
-# --- FLASK SERVER START (Render ko khush karne ke liye) ---
-app_web = Flask(__name__)
-
-@app_web.route('/')
-def hello_world():
-    return 'Bot is running!'
-
-def run_web():
-    # Render PORT env variable deta hai, nahi to 8080 use karega
-    port = int(os.environ.get("PORT", 8080))
-    app_web.run(host='0.0.0.0', port=port)
-
-# Flask ko alag thread me chalana
-t = threading.Thread(target=run_web)
-t.daemon = True
-t.start()
-# --- FLASK SERVER END ---
-
-
-# --- MAIN BOT CODE ---
+# Client initialize karein
 app = Client(
     "my_random_bot",
     api_id=API_ID,
@@ -33,19 +10,69 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-REPLY_LIST = [
-    "hello",
-    "hello cutie",
-    "Hello Mr",
-    "hello guys",
-    "kaise ho dear"
-]
+# --- 1. START COMMAND HANDLER ---
+@app.on_message(filters.command("start"))
+async def start_command(client, message):
+    # Bot ka username fetch karte hain taaki group add link ban sake
+    bot_info = await client.get_me()
+    username = bot_info.username
+    
+    # Photo ka URL (Yahan aap apni pasand ki photo ka link daal sakte hain)
+    # Ya agar file local hai to "photo.jpg" likh sakte hain
+    IMG_URL = "https://graph.org/file/5d8a6e843c0818276f625.jpg"
 
+    # Buttons define karte hain
+    buttons = InlineKeyboardMarkup([
+        [
+            # Button 1: Add to Group (URL Button)
+            InlineKeyboardButton(
+                text="Add me to group",
+                url=f"http://t.me/{username}?startgroup=true"
+            )
+        ],
+        [
+            # Button 2: About (Callback Button)
+            InlineKeyboardButton(
+                text="About",
+                callback_data="about_section"
+            )
+        ]
+    ])
+
+    # Photo ke saath message bhejna
+    await message.reply_photo(
+        photo=IMG_URL,
+        caption="**Hello!** 👋\nMain ek Python bot hu. Niche diye gaye buttons se mujhe group me add karein.",
+        reply_markup=buttons
+    )
+
+
+# --- 2. CALLBACK HANDLER (About Button ke liye) ---
+@app.on_callback_query(filters.regex("about_section"))
+async def about_callback(client, callback_query):
+    # Jab user "About" button dabayega to ye function chalega
+    
+    about_text = (
+        "🤖 **About Me:**\n\n"
+        "Name: My Super Bot\n"
+        "Language: Python (Pyrogram)\n"
+        "Developer: Aapka Naam\n"
+        "Status: V1.0 Running"
+    )
+    
+    # Pehle button click ko acknowledge karein (Loading circle hatane ke liye)
+    await callback_query.answer("Details niche bheji gayi hain!")
+    
+    # User ko text message bhejein
+    await callback_query.message.reply_text(about_text)
+
+
+# --- 3. PURANA LOGIC (Hii wala - Optional) ---
 @app.on_message(filters.text & filters.regex(r"(?i)^hii$"))
 async def respond_to_hii(client, message):
-    selected_reply = random.choice(REPLY_LIST)
-    await message.reply_text(selected_reply)
-    print(f"Replied: {selected_reply}")
+    await message.reply_text("Hello dear! Kaise ho?")
 
+
+# --- BOT RUN ---
 print("Bot start ho gaya hai...")
 app.run()
