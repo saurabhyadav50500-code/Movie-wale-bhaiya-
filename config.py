@@ -1,3 +1,5 @@
-API_ID =  34119293
-API_HASH = "ebea85e712484252c681be91348fdc85"  
-BOT_TOKEN = "8049427229:AAE_MuHSbRJ2TeVD_TPEOBnHRk8fxRc9zik"
+# config.py
+
+API_ID = 12345678  # यहाँ अपना API ID डालें (Integers में)
+API_HASH = "yOuRApiHaShHeRe"  # यहाँ अपना API HASH डालें
+BOT_TOKEN = "123456:ABC-DefGhIjKlMnOpQrStUvWxYz"  # यहाँ अपना Bot Token डालें
