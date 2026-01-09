@@ -1,23 +1,26 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from pyrogram import Client, filters
 import os
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+api_id = int(os.environ.get("API_ID"))
+api_hash = os.environ.get("API_HASH")
+bot_token = os.environ.get("BOT_TOKEN")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Bot start ho gaya!")
+app = Client(
+    "movie_bot",
+    api_id=api_id,
+    api_hash=api_hash,
+    bot_token=bot_token
+)
 
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Text mila 👍")
+@app.on_message(filters.command("start"))
+async def start(client, message):
+    await message.reply_text(
+        "👋 Welcome!\n"
+        "Mai Movie Info Bot hoon 🎬"
+    )
 
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+@app.on_message(filters.text & ~filters.command)
+async def text_handler(client, message):
+    await message.reply_text("Text mila 👍")
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-
-    print("Bot running...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+app.run()
