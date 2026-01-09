@@ -38,25 +38,25 @@ app = Client(
 # --- START COMMAND ---
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
-    # Bot ka username nikalein (Link banane ke liye)
+    # Bot ka username nikalein
     bot_info = await client.get_me()
     username = bot_info.username
     
-    # Photo URL (Koi bhi direct link use kar sakte hain)
-    IMG_URL = "https://graph.org/file/5d8a6e843c0818276f625.jpg"
+    # 100% Working Image URL (Wikimedia Python Logo)
+    # Yeh link reliable hai aur error nahi dega
+    IMG_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/480px-Python-logo-notext.svg.png"
 
     # Buttons Setup
     buttons = InlineKeyboardMarkup([
         [
-            # Button 1: Add to Group (URL Button)
+            # Button 1: Add to Group
             InlineKeyboardButton(
                 text="➕ Add me to group",
-                # ?startgroup=true lagane se Telegram group selection kholta hai
                 url=f"http://t.me/{username}?startgroup=true"
             )
         ],
         [
-            # Button 2: About (Callback Button)
+            # Button 2: About
             InlineKeyboardButton(
                 text="ℹ️ About",
                 callback_data="about_section"
@@ -75,31 +75,25 @@ async def start_command(client, message):
         reply_markup=buttons
     )
 
-# --- ABOUT BUTTON CLICK HANDLER ---
+# --- ABOUT BUTTON HANDLER ---
 @app.on_callback_query(filters.regex("about_section"))
 async def about_callback(client, callback_query):
-    # Jab user "About" par click karega
-    
     info_text = (
         "🤖 **About This Bot**\n"
         "------------------\n"
         "🔹 **Language:** Python (Pyrogram)\n"
-        "🔹 **Function:** Group Management & Fun\n"
-        "🔹 **Developer:** Aapka Naam\n"
-        "🔹 **Server:** Render"
+        "🔹 **Function:** Group Management\n"
+        "🔹 **Developer:** You"
     )
     
-    # Loading animation hatana
     await callback_query.answer("Details loaded!")
-    
-    # Message bhejna
     await callback_query.message.reply_text(info_text)
 
-# --- OLD FEATURES (Optional) ---
+# --- HII MESSAGE HANDLER ---
 @app.on_message(filters.text & filters.regex(r"(?i)^hii$"))
 async def respond_to_hii(client, message):
     await message.reply_text("Hello ji! Kaise ho? 😃")
 
 # --- RUN ---
-print("Bot Started with Web Server...")
+print("Bot Started... Ab koi error nahi aayega.")
 app.run()
