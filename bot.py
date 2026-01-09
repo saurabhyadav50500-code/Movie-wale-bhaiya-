@@ -14,10 +14,10 @@ app = Client(
 
 @app.on_message(filters.command("start"))
 async def start(client, message):
-    await message.reply_text("👋 Hello! Bot sahi chal raha hai")
+    await message.reply_text("👋 Hello! Bot start ho gaya")
 
-@app.on_message(filters.text & ~filters.command())
+@app.on_message(filters.text & ~filters.command(["start"]))
 async def text_handler(client, message):
-    await message.reply_text("Aapne text bheja 👍")
+    await message.reply_text("Normal text mila 👍")
 
 app.run()
