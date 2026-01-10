@@ -27,12 +27,13 @@ t.start()
 # PART 2: MAIN BOT CODE
 # ==========================================
 
-# Client initialize
+# 👇 YAHAN CHANGE KIYA HAI (Plugins Connect kiye hain)
 app = Client(
     "my_random_bot",
     api_id=API_ID,
     api_hash=API_HASH,
-    bot_token=BOT_TOKEN
+    bot_token=BOT_TOKEN,
+    plugins=dict(root="plugins") # ✅ Ye line bahut zaroori hai!
 )
 
 # --- START COMMAND ---
@@ -42,21 +43,17 @@ async def start_command(client, message):
     bot_info = await client.get_me()
     username = bot_info.username
     
-    # 100% Working Image URL (Wikimedia Python Logo)
-    # Yeh link reliable hai aur error nahi dega
     IMG_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/480px-Python-logo-notext.svg.png"
 
     # Buttons Setup
     buttons = InlineKeyboardMarkup([
         [
-            # Button 1: Add to Group
             InlineKeyboardButton(
                 text="➕ Add me to group",
                 url=f"http://t.me/{username}?startgroup=true"
             )
         ],
         [
-            # Button 2: About
             InlineKeyboardButton(
                 text="ℹ️ About",
                 callback_data="about_section"
@@ -64,7 +61,6 @@ async def start_command(client, message):
         ]
     ])
 
-    # Photo aur Caption bhejna
     await message.reply_photo(
         photo=IMG_URL,
         caption=(
@@ -95,5 +91,5 @@ async def respond_to_hii(client, message):
     await message.reply_text("Hello ji! Kaise ho? 😃")
 
 # --- RUN ---
-print("Bot Started... Ab koi error nahi aayega.")
+print("Bot Started... Ab Plugins bhi load honge! 🟢")
 app.run()
