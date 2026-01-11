@@ -45,5 +45,34 @@ class Media:
         await self.col.insert_one(file_doc)
         return True
 
+    # --- NEW SEARCH FUNCTIONS START HERE ---
+
+    async def get_search_results(self, query):
+        """
+        Searches for files where the filename or caption matches the query.
+        Returns up to 100 results for pagination.
+        """
+        # Case-insensitive regex search
+        regex = {"$regex": query, "$options": "i"} 
+        
+        # Search in file_name OR caption
+        search_filter = {
+            "$or": [
+                {"file_name": regex},
+                {"caption": regex}
+            ]
+        }
+        
+        cursor = self.col.find(search_filter)
+        # 100 results fetch karenge taaki Next/Back buttons kaam karein
+        return await cursor.to_list(length=100)
+
+    async def get_file_by_link_id(self, link_id):
+        """
+        Fetches a single file document using the unique link_id.
+        Used when a user clicks the result link.
+        """
+        return await self.col.find_one({"link_id": link_id})
+
 # Create an instance to be used in plugins
 db = Media()
