@@ -1,124 +1,194 @@
 import math
-from pyrogram import Client, filters, enums
+from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
-
-# Database aur Utils import
-from database.ia_filterdb import Media
+from pyrogram.errors import MessageNotModified
+from database.ia_filterdb import db
 from utils import get_size
 
-# Configuration
+# --- CONFIGURATION ---
 BUTTONS_PER_PAGE = 10
 
-async def btn_parser(files: list, offset: int, query: str) -> InlineKeyboardMarkup:
+async def btn_parser(query: str, files: list, offset: int = 0):
     """
-    Generates InlineButtons for files with pagination logic.
+    Generates the InlineKeyboardMarkup with file buttons and pagination.
     """
-    total_results = len(files)
-    total_pages = math.ceil(total_results / BUTTONS_PER_PAGE)
-    current_page = (offset // BUTTONS_PER_PAGE) + 1
-
-    current_files = files[offset : offset + BUTTONS_PER_PAGE]
-
+    # 1. Slice the list for the current page
+    end_index = offset + BUTTONS_PER_PAGE
+    current_files = files[offset:end_index]
+    
     buttons = []
 
-    # 1. File Buttons
+    # 2. Create File Buttons: [ File Name | Size ]
     for file in current_files:
-        f_caption = f"{file['file_name']} | {get_size(file['file_size'])}"
-        cb_data = f"file#{file['file_id']}"
-        buttons.append([InlineKeyboardButton(text=f_caption, callback_data=cb_data)])
-
-    # 2. Pagination Buttons
-    pagination_row = []
-
-    if offset >= BUTTONS_PER_PAGE:
-        previous_offset = offset - BUTTONS_PER_PAGE
-        pagination_row.append(
-            InlineKeyboardButton(text="⬅️ Back", callback_data=f"next_{query}_{previous_offset}")
+        # Use link_id for callbacks (shorter and safer)
+        f_id = file.get('link_id') 
+        f_name = file.get('file_name', 'Unknown File')
+        f_size = get_size(file.get('file_size', 0))
+        
+        # Truncate long filenames (max 30 chars)
+        if len(f_name) > 30:
+            f_name = f_name[:27] + "..."
+            
+        buttons.append(
+            [InlineKeyboardButton(
+                text=f"📂 {f_name} | {f_size}",
+                callback_data=f"file#{f_id}"
+            )]
         )
 
-    pagination_row.append(
-        InlineKeyboardButton(text=f"Page {current_page}/{total_pages}", callback_data="pages")
+    # 3. Pagination Logic
+    total_files = len(files)
+    total_pages = math.ceil(total_files / BUTTONS_PER_PAGE)
+    current_page = math.ceil(offset / BUTTONS_PER_PAGE) + 1
+    
+    nav_buttons = []
+
+    # Back Button (Only if not on first page)
+    if offset >= BUTTONS_PER_PAGE:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="⬅️ Back",
+                callback_data=f"next_{query}_{offset - BUTTONS_PER_PAGE}"
+            )
+        )
+
+    # Page Counter (Visual only)
+    nav_buttons.append(
+        InlineKeyboardButton(
+            text=f"Page {current_page}/{total_pages}",
+            callback_data="pages" 
+        )
     )
 
-    if (offset + BUTTONS_PER_PAGE) < total_results:
-        next_offset = offset + BUTTONS_PER_PAGE
-        pagination_row.append(
-            InlineKeyboardButton(text="Next ➡️", callback_data=f"next_{query}_{next_offset}")
+    # Next Button (Only if more files exist)
+    if end_index < total_files:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="Next ➡️",
+                callback_data=f"next_{query}_{end_index}"
+            )
         )
 
-    if pagination_row:
-        buttons.append(pagination_row)
+    buttons.append(nav_buttons)
 
-    # 3. Footer Button
+    # 4. Footer Button
     buttons.append([
-        InlineKeyboardButton(text="♻️ Wrong Result?", callback_data=f"recheck_menu#{query}")
+        InlineKeyboardButton(
+            text="♻️ Close / Wrong Result",
+            callback_data=f"recheck_menu"
+        )
     ])
 
     return InlineKeyboardMarkup(buttons)
 
 
-# 👇 YAHAN CHANGE KIYA HAI: 'filters.group' hata kar '~filters.private' lagaya hai
-@Client.on_message(filters.text & ~filters.private & ~filters.edited)
+# ==========================================
+# 1. MAIN SEARCH HANDLER (Group Text)
+# ==========================================
+@Client.on_message(filters.text & filters.group & ~filters.edited)
 async def auto_filter(client: Client, message: Message):
     """
-    Main Handler: Listens for text in groups and searches the DB.
+    Catches text messages in groups and searches the database.
     """
     query = message.text
-
-    # Validation
-    if not query or len(query) < 3:
-        return
     
-    # Agar message command hai (/start, /filter etc) to ignore karein
-    if query.startswith("/"):
+    # Ignore short queries or commands
+    if len(query) < 2 or query.startswith("/"):
         return
 
-    # Database Search
-    files = await Media.get_search_results(query)
+    # Search Database
+    files = await db.get_search_results(query)
 
     if not files:
-        return
+        return # No result found, stay silent
 
-    # Prepare buttons
-    reply_markup = await btn_parser(files, 0, query)
+    # Generate Buttons for the first page (offset 0)
+    reply_markup = await btn_parser(query, files, offset=0)
 
     await message.reply_text(
-        text=f"👋 **Hello {message.from_user.mention}**,\n\n"
-             f"Found **{len(files)}** results for: `{query}`\n"
-             f"👇 Select the file you want:",
+        text=f"🔎 **Found {len(files)} results for:** `{query}`",
         reply_markup=reply_markup,
         quote=True
     )
 
 
+# ==========================================
+# 2. PAGINATION HANDLER (Next/Back)
+# ==========================================
 @Client.on_callback_query(filters.regex(r"^next_"))
-async def next_page_handler(client: Client, callback_query: CallbackQuery):
+async def next_page_handler(client: Client, callback: CallbackQuery):
     """
     Handles Pagination (Next/Back buttons).
+    Callback Data format: next_{query}_{offset}
     """
-    data = callback_query.data
+    data = callback.data
     
     try:
-        _, query, offset_str = data.split("_", 2)
-        offset = int(offset_str)
-    except ValueError:
-        await callback_query.answer("Error processing button data.", show_alert=True)
-        return
+        # Parsing using rsplit to handle movie names with underscores
+        # "next_Iron_Man_10" -> prefix="next_Iron_Man", str_offset="10"
+        prefix_query, str_offset = data.rsplit("_", 1)
+        
+        # Remove "next_" from the beginning
+        query = prefix_query.split("_", 1)[1]
+        offset = int(str_offset)
+    except (IndexError, ValueError):
+        return await callback.answer("❌ Error parsing pagination data.", show_alert=True)
 
-    files = await Media.get_search_results(query)
+    # Re-fetch results
+    files = await db.get_search_results(query)
 
     if not files:
-        await callback_query.answer("No files found.", show_alert=True)
-        return
+        return await callback.answer("❌ Search results expired.", show_alert=True)
 
-    reply_markup = await btn_parser(files, offset, query)
+    # Generate new buttons
+    new_markup = await btn_parser(query, files, offset=offset)
 
     try:
-        await callback_query.message.edit_text(
-            text=f"👋 **Hello {callback_query.from_user.mention}**,\n\n"
-                 f"Found **{len(files)}** results for: `{query}`\n"
-                 f"👇 Select the file you want:",
-            reply_markup=reply_markup
+        await callback.edit_message_reply_markup(reply_markup=new_markup)
+    except MessageNotModified:
+        pass # User clicked same button twice, ignore error
+    except Exception as e:
+        print(f"Pagination Error: {e}")
+
+
+# ==========================================
+# 3. FILE SENDING HANDLER (On Button Click)
+# ==========================================
+@Client.on_callback_query(filters.regex(r"^file#"))
+async def file_click_handler(client: Client, callback: CallbackQuery):
+    """
+    Handles clicking on a file button to send the file.
+    Data format: file#{link_id}
+    """
+    try:
+        link_id = callback.data.split("#", 1)[1]
+    except IndexError:
+        return await callback.answer("❌ Invalid Request")
+
+    # Fetch file details from DB
+    file_info = await db.get_file_by_link_id(link_id)
+    
+    if not file_info:
+        return await callback.answer("❌ File not found (Deleted).", show_alert=True)
+
+    await callback.answer("📂 Sending File...", show_alert=False)
+
+    try:
+        # Send the file
+        await client.send_cached_media(
+            chat_id=callback.message.chat.id,
+            file_id=file_info['file_id'],
+            caption=file_info['caption'] or "",
+            reply_to_message_id=callback.message.reply_to_message.id if callback.message.reply_to_message else None
         )
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Send File Error: {e}")
+        await callback.answer("❌ Error sending file. Make sure I am Admin.", show_alert=True)
+
+
+# ==========================================
+# 4. CLOSE BUTTON HANDLER
+# ==========================================
+@Client.on_callback_query(filters.regex(r"^recheck_menu"))
+async def close_handler(client: Client, callback: CallbackQuery):
+    await callback.message.delete()
