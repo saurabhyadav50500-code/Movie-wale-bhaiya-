@@ -6,7 +6,7 @@ import threading
 import os
 
 # ==========================================
-# PART 1: WEBSERVER (Render Error Hatane ke liye)
+# PART 1: WEBSERVER
 # ==========================================
 app_web = Flask(__name__)
 
@@ -18,7 +18,6 @@ def run_web_server():
     port = int(os.environ.get("PORT", 8080))
     app_web.run(host='0.0.0.0', port=port)
 
-# Server ko background thread me chalana
 t = threading.Thread(target=run_web_server)
 t.daemon = True
 t.start()
@@ -32,15 +31,15 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    plugins=dict(root="plugins") # ✅ Ye line bahut zaroori hai!
+    plugins=dict(root="plugins")
 )
 
 # --- START COMMAND ---
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
-    # 👇 YAHAN CHANGE KIYA HAI (CRITICAL FIX)
-    # Agar message me "/start" ke baad kuch aur bhi hai (jaise file_id), 
-    # to ye function yahin ruk jayega aur Plugin ko kaam karne dega.
+    # 👇 YAHAN CHECK HAI:
+    # Agar message "/start file_xyz" hai, to ye function ruk jayega
+    # Aur control autofilter.py ke paas chala jayega.
     if len(message.command) > 1:
         return 
 
@@ -50,7 +49,6 @@ async def start_command(client, message):
     
     IMG_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/480px-Python-logo-notext.svg.png"
 
-    # Buttons Setup
     buttons = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
