@@ -8,9 +8,9 @@ from utils import get_size
 # --- CONFIGURATION ---
 BUTTONS_PER_PAGE = 10
 
-async def btn_parser(query: str, files: list, offset: int = 0):
+async def btn_parser(query: str, files: list, client: Client, offset: int = 0):
     """
-    Generates the InlineKeyboardMarkup with file buttons and pagination.
+    Generates the InlineKeyboardMarkup with URL buttons (Deep Link) and pagination.
     """
     # 1. Slice the list for the current page
     end_index = offset + BUTTONS_PER_PAGE
@@ -18,21 +18,26 @@ async def btn_parser(query: str, files: list, offset: int = 0):
     
     buttons = []
 
-    # 2. Create File Buttons: [ File Name | Size ]
+    # Bot ka Username chahiye URL banane ke liye
+    # (Hum isse client.me.username se le rahe hain)
+    bot_username = client.me.username or "my_random_bot"
+
+    # 2. Create File Buttons: [ File Name | Size ] -> URL Button
     for file in current_files:
-        # Use link_id for callbacks (shorter and safer)
         f_id = file.get('link_id') 
         f_name = file.get('file_name', 'Unknown File')
         f_size = get_size(file.get('file_size', 0))
         
-        # Truncate long filenames (max 30 chars)
+        # Truncate long filenames
         if len(f_name) > 30:
             f_name = f_name[:27] + "..."
             
+        # URL Button banayenge (PM mein redirect karne ke liye)
+        # Format: https://t.me/BotUsername?start=file_LINKID
         buttons.append(
             [InlineKeyboardButton(
                 text=f"📂 {f_name} | {f_size}",
-                callback_data=f"file#{f_id}"
+                url=f"https://t.me/{bot_username}?start=file_{f_id}"
             )]
         )
 
@@ -43,7 +48,6 @@ async def btn_parser(query: str, files: list, offset: int = 0):
     
     nav_buttons = []
 
-    # Back Button (Only if not on first page)
     if offset >= BUTTONS_PER_PAGE:
         nav_buttons.append(
             InlineKeyboardButton(
@@ -52,7 +56,6 @@ async def btn_parser(query: str, files: list, offset: int = 0):
             )
         )
 
-    # Page Counter (Visual only)
     nav_buttons.append(
         InlineKeyboardButton(
             text=f"Page {current_page}/{total_pages}",
@@ -60,7 +63,6 @@ async def btn_parser(query: str, files: list, offset: int = 0):
         )
     )
 
-    # Next Button (Only if more files exist)
     if end_index < total_files:
         nav_buttons.append(
             InlineKeyboardButton(
@@ -85,7 +87,6 @@ async def btn_parser(query: str, files: list, offset: int = 0):
 # ==========================================
 # 1. MAIN SEARCH HANDLER (Group Text)
 # ==========================================
-# 👇 FIX: Removed '~filters.edited' to prevent AttributeError
 @Client.on_message(filters.text & filters.group)
 async def auto_filter(client: Client, message: Message):
     """
@@ -93,95 +94,97 @@ async def auto_filter(client: Client, message: Message):
     """
     query = message.text
     
-    # Ignore short queries or commands
     if not query or len(query) < 2 or query.startswith("/"):
         return
 
-    # Search Database
+    # Bot ki identity load karein (Username ke liye)
+    if not client.me:
+        await client.get_me()
+
     files = await db.get_search_results(query)
 
     if not files:
-        return # No result found, stay silent
+        return 
 
-    # Generate Buttons for the first page (offset 0)
-    reply_markup = await btn_parser(query, files, offset=0)
+    # 'client' ko pass kar rahe hain taaki username mil sake
+    reply_markup = await btn_parser(query, files, client, offset=0)
 
     await message.reply_text(
-        text=f"🔎 **Found {len(files)} results for:** `{query}`",
+        text=f"🔎 **Found {len(files)} results for:** `{query}`\n\n👇 **Click below to get file in PM:**",
         reply_markup=reply_markup,
         quote=True
     )
 
 
 # ==========================================
-# 2. PAGINATION HANDLER (Next/Back)
+# 2. PAGINATION HANDLER
 # ==========================================
 @Client.on_callback_query(filters.regex(r"^next_"))
 async def next_page_handler(client: Client, callback: CallbackQuery):
-    """
-    Handles Pagination (Next/Back buttons).
-    Callback Data format: next_{query}_{offset}
-    """
     data = callback.data
     
     try:
-        # Parsing using rsplit to handle movie names with underscores
         prefix_query, str_offset = data.rsplit("_", 1)
         query = prefix_query.split("_", 1)[1]
         offset = int(str_offset)
     except (IndexError, ValueError):
         return await callback.answer("❌ Error parsing pagination data.", show_alert=True)
 
-    # Re-fetch results
     files = await db.get_search_results(query)
-
     if not files:
         return await callback.answer("❌ Search results expired.", show_alert=True)
 
-    # Generate new buttons
-    new_markup = await btn_parser(query, files, offset=offset)
+    # Bot identity check
+    if not client.me:
+        await client.get_me()
+
+    new_markup = await btn_parser(query, files, client, offset=offset)
 
     try:
         await callback.edit_message_reply_markup(reply_markup=new_markup)
     except MessageNotModified:
-        pass # User clicked same button twice, ignore error
+        pass 
     except Exception as e:
         print(f"Pagination Error: {e}")
 
 
 # ==========================================
-# 3. FILE SENDING HANDLER (On Button Click)
+# 3. FILE DELIVERY HANDLER (PM Only)
 # ==========================================
-@Client.on_callback_query(filters.regex(r"^file#"))
-async def file_click_handler(client: Client, callback: CallbackQuery):
+# Jab user link par click karke PM mein aayega -> /start file_xyz123
+
+@Client.on_message(filters.command("start") & filters.private & filters.regex("file_"))
+async def file_delivery_handler(client: Client, message: Message):
     """
-    Handles clicking on a file button to send the file.
-    Data format: file#{link_id}
+    Handles the Deep Link start command to deliver the file.
     """
     try:
-        link_id = callback.data.split("#", 1)[1]
+        # /start file_xyz123 -> extract 'xyz123'
+        # message.text looks like: "/start file_abc123"
+        link_id = message.text.split("file_", 1)[1]
     except IndexError:
-        return await callback.answer("❌ Invalid Request")
+        return await message.reply("❌ Invalid Link")
 
     # Fetch file details from DB
     file_info = await db.get_file_by_link_id(link_id)
     
     if not file_info:
-        return await callback.answer("❌ File not found (Deleted).", show_alert=True)
+        return await message.reply("❌ File not found (Deleted).")
 
-    await callback.answer("📂 Sending File...", show_alert=False)
+    # Status Message
+    msg = await message.reply("📂 **Sending File... Please wait.**", quote=True)
 
     try:
         # Send the file
         await client.send_cached_media(
-            chat_id=callback.message.chat.id,
+            chat_id=message.from_user.id,
             file_id=file_info['file_id'],
             caption=file_info['caption'] or "",
-            reply_to_message_id=callback.message.reply_to_message.id if callback.message.reply_to_message else None
         )
+        await msg.delete() # Loading message delete kar do
     except Exception as e:
         print(f"Send File Error: {e}")
-        await callback.answer("❌ Error sending file. Make sure I am Admin.", show_alert=True)
+        await msg.edit(f"❌ Error sending file: {e}")
 
 
 # ==========================================
