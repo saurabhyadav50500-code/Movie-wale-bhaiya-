@@ -85,7 +85,8 @@ async def btn_parser(query: str, files: list, offset: int = 0):
 # ==========================================
 # 1. MAIN SEARCH HANDLER (Group Text)
 # ==========================================
-@Client.on_message(filters.text & filters.group & ~filters.edited)
+# 👇 FIX: Removed '~filters.edited' to prevent AttributeError
+@Client.on_message(filters.text & filters.group)
 async def auto_filter(client: Client, message: Message):
     """
     Catches text messages in groups and searches the database.
@@ -93,7 +94,7 @@ async def auto_filter(client: Client, message: Message):
     query = message.text
     
     # Ignore short queries or commands
-    if len(query) < 2 or query.startswith("/"):
+    if not query or len(query) < 2 or query.startswith("/"):
         return
 
     # Search Database
@@ -125,10 +126,7 @@ async def next_page_handler(client: Client, callback: CallbackQuery):
     
     try:
         # Parsing using rsplit to handle movie names with underscores
-        # "next_Iron_Man_10" -> prefix="next_Iron_Man", str_offset="10"
         prefix_query, str_offset = data.rsplit("_", 1)
-        
-        # Remove "next_" from the beginning
         query = prefix_query.split("_", 1)[1]
         offset = int(str_offset)
     except (IndexError, ValueError):
