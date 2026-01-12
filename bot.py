@@ -27,7 +27,6 @@ t.start()
 # PART 2: MAIN BOT CODE
 # ==========================================
 
-# 👇 YAHAN CHANGE KIYA HAI (Plugins Connect kiye hain)
 app = Client(
     "my_random_bot",
     api_id=API_ID,
@@ -37,8 +36,14 @@ app = Client(
 )
 
 # --- START COMMAND ---
-@app.on_message(filters.command("start"))
+@app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
+    # 👇 YAHAN CHANGE KIYA HAI (CRITICAL FIX)
+    # Agar message me "/start" ke baad kuch aur bhi hai (jaise file_id), 
+    # to ye function yahin ruk jayega aur Plugin ko kaam karne dega.
+    if len(message.command) > 1:
+        return 
+
     # Bot ka username nikalein
     bot_info = await client.get_me()
     username = bot_info.username
@@ -78,7 +83,7 @@ async def about_callback(client, callback_query):
         "🤖 **About This Bot**\n"
         "------------------\n"
         "🔹 **Language:** Python (Pyrogram)\n"
-        "🔹 **Function:** Group Management\n"
+        "🔹 **Function:** Auto Filter & File Store\n"
         "🔹 **Developer:** You"
     )
     
