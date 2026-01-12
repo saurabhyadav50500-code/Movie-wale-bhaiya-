@@ -20,7 +20,8 @@ async def btn_parser(query: str, files: list, client: Client, offset: int = 0):
 
     # Bot ka Username chahiye URL banane ke liye
     # (Hum isse client.me.username se le rahe hain)
-    bot_username = client.me.username or "my_random_bot"
+    # Agar client.me load nahi hai to safe fallback
+    bot_username = client.me.username if client.me else "temp_bot_username"
 
     # 2. Create File Buttons: [ File Name | Size ] -> URL Button
     for file in current_files:
@@ -97,7 +98,7 @@ async def auto_filter(client: Client, message: Message):
     if not query or len(query) < 2 or query.startswith("/"):
         return
 
-    # Bot ki identity load karein (Username ke liye)
+    # Bot ki identity load karein (Username ke liye zaroori hai)
     if not client.me:
         await client.get_me()
 
@@ -161,7 +162,10 @@ async def file_delivery_handler(client: Client, message: Message):
     try:
         # /start file_xyz123 -> extract 'xyz123'
         # message.text looks like: "/start file_abc123"
-        link_id = message.text.split("file_", 1)[1]
+        if len(message.command) < 2:
+            return
+
+        link_id = message.command[1].split("file_", 1)[1]
     except IndexError:
         return await message.reply("❌ Invalid Link")
 
