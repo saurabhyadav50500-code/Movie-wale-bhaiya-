@@ -9,32 +9,26 @@ from utils import get_size
 BUTTONS_PER_PAGE = 10
 
 async def btn_parser(query: str, files: list, client: Client, offset: int = 0):
-    """
-    Generates the InlineKeyboardMarkup with URL buttons (Deep Link) and pagination.
-    """
-    # 1. Slice the list for the current page
     end_index = offset + BUTTONS_PER_PAGE
     current_files = files[offset:end_index]
     
     buttons = []
+    
+    # Username safe fetch
+    if client.me:
+        bot_username = client.me.username
+    else:
+        bot_username = "my_random_bot" # Fallback
 
-    # Bot ka Username chahiye URL banane ke liye
-    # (Hum isse client.me.username se le rahe hain)
-    # Agar client.me load nahi hai to safe fallback
-    bot_username = client.me.username if client.me else "temp_bot_username"
-
-    # 2. Create File Buttons: [ File Name | Size ] -> URL Button
     for file in current_files:
         f_id = file.get('link_id') 
         f_name = file.get('file_name', 'Unknown File')
         f_size = get_size(file.get('file_size', 0))
         
-        # Truncate long filenames
         if len(f_name) > 30:
             f_name = f_name[:27] + "..."
             
-        # URL Button banayenge (PM mein redirect karne ke liye)
-        # Format: https://t.me/BotUsername?start=file_LINKID
+        # URL Button for PM Redirect
         buttons.append(
             [InlineKeyboardButton(
                 text=f"📂 {f_name} | {f_size}",
@@ -42,7 +36,6 @@ async def btn_parser(query: str, files: list, client: Client, offset: int = 0):
             )]
         )
 
-    # 3. Pagination Logic
     total_files = len(files)
     total_pages = math.ceil(total_files / BUTTONS_PER_PAGE)
     current_page = math.ceil(offset / BUTTONS_PER_PAGE) + 1
@@ -74,7 +67,6 @@ async def btn_parser(query: str, files: list, client: Client, offset: int = 0):
 
     buttons.append(nav_buttons)
 
-    # 4. Footer Button
     buttons.append([
         InlineKeyboardButton(
             text="♻️ Close / Wrong Result",
@@ -90,15 +82,12 @@ async def btn_parser(query: str, files: list, client: Client, offset: int = 0):
 # ==========================================
 @Client.on_message(filters.text & filters.group)
 async def auto_filter(client: Client, message: Message):
-    """
-    Catches text messages in groups and searches the database.
-    """
     query = message.text
     
     if not query or len(query) < 2 or query.startswith("/"):
         return
 
-    # Bot ki identity load karein (Username ke liye zaroori hai)
+    # Bot Identity Ensure karein
     if not client.me:
         await client.get_me()
 
@@ -107,7 +96,6 @@ async def auto_filter(client: Client, message: Message):
     if not files:
         return 
 
-    # 'client' ko pass kar rahe hain taaki username mil sake
     reply_markup = await btn_parser(query, files, client, offset=0)
 
     await message.reply_text(
@@ -135,7 +123,6 @@ async def next_page_handler(client: Client, callback: CallbackQuery):
     if not files:
         return await callback.answer("❌ Search results expired.", show_alert=True)
 
-    # Bot identity check
     if not client.me:
         await client.get_me()
 
@@ -150,49 +137,59 @@ async def next_page_handler(client: Client, callback: CallbackQuery):
 
 
 # ==========================================
-# 3. FILE DELIVERY HANDLER (PM Only)
+# 3. FILE DELIVERY HANDLER (Priority High)
 # ==========================================
-# Jab user link par click karke PM mein aayega -> /start file_xyz123
-
-@Client.on_message(filters.command("start") & filters.private & filters.regex("file_"))
+# group=-1 ka matlab ye handler sabse pehle check hoga.
+@Client.on_message(filters.command("start") & filters.private, group=-1)
 async def file_delivery_handler(client: Client, message: Message):
     """
-    Handles the Deep Link start command to deliver the file.
+    Handles deep link delivery. High priority.
     """
+    # Debug Print: Console me check karein kya ye print ho raha hai?
+    print(f"DEBUG: Start Command Received: {message.text}")
+
+    # Agar sirf /start hai to ignore karo (Bot.py sambhalega)
+    if len(message.command) < 2:
+        return
+    
+    payload = message.command[1] # "file_xyz123"
+    
+    # Check karein kya ye file request hai?
+    if not payload.startswith("file_"):
+        return
+
     try:
-        # /start file_xyz123 -> extract 'xyz123'
-        # message.text looks like: "/start file_abc123"
-        if len(message.command) < 2:
-            return
-
-        link_id = message.command[1].split("file_", 1)[1]
+        # "file_" hata kar ID nikalein
+        link_id = payload.split("file_", 1)[1]
     except IndexError:
-        return await message.reply("❌ Invalid Link")
+        return await message.reply("❌ Invalid Link Format")
 
-    # Fetch file details from DB
+    print(f"DEBUG: Searching for Link ID: {link_id}")
+
+    # Database Search
     file_info = await db.get_file_by_link_id(link_id)
     
     if not file_info:
-        return await message.reply("❌ File not found (Deleted).")
+        print("DEBUG: File Not Found in DB")
+        return await message.reply("❌ File not found (Deleted or Invalid).")
 
-    # Status Message
-    msg = await message.reply("📂 **Sending File... Please wait.**", quote=True)
+    # Message Bhejein
+    status_msg = await message.reply("📂 **Found File! Sending now...**")
 
     try:
-        # Send the file
         await client.send_cached_media(
             chat_id=message.from_user.id,
             file_id=file_info['file_id'],
             caption=file_info['caption'] or "",
         )
-        await msg.delete() # Loading message delete kar do
+        await status_msg.delete()
     except Exception as e:
-        print(f"Send File Error: {e}")
-        await msg.edit(f"❌ Error sending file: {e}")
+        print(f"DEBUG: Error Sending File: {e}")
+        await status_msg.edit(f"❌ Error sending file: {str(e)}")
 
 
 # ==========================================
-# 4. CLOSE BUTTON HANDLER
+# 4. CLOSE HANDLER
 # ==========================================
 @Client.on_callback_query(filters.regex(r"^recheck_menu"))
 async def close_handler(client: Client, callback: CallbackQuery):
