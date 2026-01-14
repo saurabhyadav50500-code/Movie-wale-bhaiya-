@@ -1,5 +1,3 @@
-# database/ia_filterdb.py
-
 import motor.motor_asyncio
 from info import MONGO_URI, DATABASE_NAME, COLLECTION_NAME
 from utils import get_file_details, generate_link_id
@@ -45,7 +43,7 @@ class Media:
         await self.col.insert_one(file_doc)
         return True
 
-    # --- NEW SEARCH FUNCTIONS START HERE ---
+    # --- SEARCH FUNCTIONS ---
 
     async def get_search_results(self, query):
         """
@@ -73,6 +71,13 @@ class Media:
         Used when a user clicks the result link.
         """
         return await self.col.find_one({"link_id": link_id})
+
+    # 👇 NEW FUNCTION FOR /delete_all COMMAND
+    async def delete_all_files(self):
+        """
+        Database se saari files delete kar dega.
+        """
+        await self.col.delete_many({})
 
 # Create an instance to be used in plugins
 db = Media()
