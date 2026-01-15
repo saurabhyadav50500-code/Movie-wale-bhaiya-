@@ -1,6 +1,7 @@
 import re
 import logging
 import motor.motor_asyncio
+from datetime import datetime
 from info import MONGO_URI, DATABASE_NAME, COLLECTION_NAME
 from utils import get_file_details, generate_link_id
 
@@ -11,23 +12,83 @@ class Media:
         self.client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
         self.db = self.client[DATABASE_NAME]
         self.col = self.db[COLLECTION_NAME]
+        
+        # 👇 NEW: Pagination Fix Collections
+        self.temp_col = self.db["temp_searches"]  # Stores query text temporarily
+        self.seq_col = self.db["sequences"]       # Generates IDs (1, 2, 3...)
 
     async def ensure_indexes(self):
         """
-        Standard Indexes for Performance (Not Fuzzy).
-        Fuzzy Index is handled by MongoDB Atlas Cloud (JSON).
+        Creates standard indexes and TTL index for temp searches.
+        Note: Fuzzy Index is managed via MongoDB Atlas Website.
         """
         try:
-            # Duplicate check ke liye index
+            # 1. Standard File Indexes
             await self.col.create_index("file_unique_id", unique=True)
-            # Link ID search ke liye
             await self.col.create_index("link_id")
-            # Fallback text search ke liye basic index
+            # Fallback text index (just in case)
             await self.col.create_index([("file_name", "text")])
             
-            logger.info("✅ Standard Indexes created successfully.")
+            # 2. 👇 NEW: TTL Index (Delete temp searches after 48 hours)
+            # 172800 seconds = 48 Hours
+            await self.temp_col.create_index("created_at", expireAfterSeconds=172800)
+            
+            logger.info("✅ Database Indexes Created Successfully.")
         except Exception as e:
             logger.error(f"❌ Error creating index: {e}")
+
+    # ==================================================================
+    # 🔢 PAGINATION & ID GENERATION (Fix for Button Data Too Long)
+    # ==================================================================
+
+    async def get_next_sequence(self):
+        """Generates a unique incremental ID (1, 2, 3...) for searches."""
+        try:
+            doc = await self.seq_col.find_one_and_update(
+                {"_id": "search_id"},
+                {"$inc": {"seq": 1}},
+                upsert=True,
+                return_document=True
+            )
+            return doc["seq"]
+        except Exception as e:
+            logger.error(f"Sequence Error: {e}")
+            return None
+
+    async def save_search_query(self, query, user_id):
+        """
+        Saves the long query text mapped to a short Integer ID.
+        """
+        try:
+            # 1. Get unique Short ID
+            search_id = await self.get_next_sequence()
+            
+            if not search_id:
+                return None
+
+            # 2. Save using upsert=True to prevent Duplicate Key Errors
+            await self.temp_col.update_one(
+                {"_id": search_id}, 
+                {"$set": {
+                    "query": query,
+                    "user_id": user_id,
+                    "created_at": datetime.utcnow()
+                }},
+                upsert=True 
+            )
+            return search_id
+        except Exception as e:
+            logger.error(f"Save Search Error: {e}")
+            return None
+
+    async def get_search_query(self, search_id):
+        """Retrieves the original text query using the Integer ID."""
+        try:
+            doc = await self.temp_col.find_one({"_id": int(search_id)})
+            return doc["query"] if doc else None
+        except Exception as e:
+            logger.error(f"Get Query Error: {e}")
+            return None
 
     # ==================================================================
     # 🧹 CLEANING & PARSING HELPERS
@@ -85,7 +146,7 @@ class Media:
 
     async def save_batch(self, messages):
         """
-        Saves a list of messages. No heavy N-Grams needed here anymore.
+        Saves a list of messages. No heavy N-Grams needed (handled by Atlas).
         """
         documents = []
         for message in messages:
