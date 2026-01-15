@@ -188,7 +188,7 @@ class Media:
         return result == 1
 
     # ==================================================================
-    # 🔎 SEARCH LOGIC (Text + Fuzzy + Fallback)
+    # 🔎 SEARCH LOGIC (Text + Fuzzy + Junk Filter)
     # ==================================================================
 
     async def get_search_results(self, query):
@@ -196,7 +196,7 @@ class Media:
         1. Expands Query (Lang/Desi).
         2. Extracts Year.
         3. Generates Query N-Grams (Fuzzy).
-        4. Runs Aggregation (Smart Scoring).
+        4. Runs Aggregation (Smart Scoring & Junk Filtering).
         5. Falls back to Regex if needed.
         """
         query = self.clean_text(query)
@@ -219,14 +219,10 @@ class Media:
         year_match = re.search(r'\b(19|20)\d{2}\b', expanded_query)
         if year_match:
             filter_year = year_match.group(0)
-            # Remove year from text query to allow fuzzy matching on name
             expanded_query = expanded_query.replace(filter_year, "").strip()
 
         # 3. Generate N-Grams for Query (For Fuzzy Match)
-        # This allows "Spidr" to match "Spider" via N-Grams
         query_ngrams = self.generate_ngrams(expanded_query)
-        
-        # Combine: "Query" OR "Ngrams"
         final_query = f"{expanded_query} {query_ngrams}"
 
         # 4. Aggregation Pipeline
@@ -242,7 +238,10 @@ class Media:
                 "link_id": 1, 
                 "score": {"$meta": "textScore"} # Relevance Score
             }},
-            {"$sort": {"score": -1}}, # High Score First
+            # 🛑 JUNK FILTER: Score > 0.6 check
+            {"$match": {"score": {"$gt": 0.6}}}, 
+            
+            {"$sort": {"score": -1}}, 
             {"$limit": 50}
         ]
 
@@ -254,12 +253,20 @@ class Media:
             logger.error(f"Aggregation Error: {e}")
 
         # 5. Fallback: Split Regex (If Fuzzy/Text fails)
+        # Check if query is too short for regex fallback (prevents garbage results)
+        if len(query) < 3:
+            return []
+
         raw_words = query.replace(filter_year, "") if filter_year else query
         split_words = raw_words.split()
         if not split_words: return []
 
-        regex_pattern = "|".join([re.escape(w) for w in split_words if len(w) > 2])
-        if not regex_pattern: return []
+        # Only create regex for words longer than 2 characters
+        valid_words = [re.escape(w) for w in split_words if len(w) > 2]
+        
+        if not valid_words: return []
+
+        regex_pattern = "|".join(valid_words)
 
         fallback_query = {
             "$or": [
