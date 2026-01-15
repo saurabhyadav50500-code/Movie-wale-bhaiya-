@@ -14,36 +14,23 @@ class Media:
 
     async def ensure_indexes(self):
         """
-        Creates the Text Index with weights for Relevance & Fuzzy Scoring.
+        Standard Indexes for Performance (Not Fuzzy).
+        Fuzzy Index is handled by MongoDB Atlas Cloud (JSON).
         """
         try:
-            # Create Text Index
-            # Weights: 
-            # 10 -> Exact Name (Highest)
-            # 5  -> Metadata (Medium)
-            # 3  -> Fuzzy N-Grams (Typo Tolerance)
-            # 1  -> Caption (Low)
-            await self.col.create_index(
-                [
-                    ("file_name", "text"),
-                    ("search_text", "text"),
-                    ("ngram_text", "text"),  # 👈 Fuzzy Field
-                    ("caption", "text")
-                ],
-                weights={
-                    "file_name": 10,
-                    "search_text": 5,
-                    "ngram_text": 3,
-                    "caption": 1
-                },
-                name="SmartFuzzyIndex"
-            )
-            logger.info("✅ Smart Fuzzy Index created successfully.")
+            # Duplicate check ke liye index
+            await self.col.create_index("file_unique_id", unique=True)
+            # Link ID search ke liye
+            await self.col.create_index("link_id")
+            # Fallback text search ke liye basic index
+            await self.col.create_index([("file_name", "text")])
+            
+            logger.info("✅ Standard Indexes created successfully.")
         except Exception as e:
             logger.error(f"❌ Error creating index: {e}")
 
     # ==================================================================
-    # 🧠 SMART INDEXING HELPERS (Clean, Parse, Fuzzy)
+    # 🧹 CLEANING & PARSING HELPERS
     # ==================================================================
 
     @staticmethod
@@ -62,19 +49,6 @@ class Media:
             text = re.sub(pattern, replacement, text)
             
         return re.sub(r'\s+', ' ', text).strip()
-
-    @staticmethod
-    def generate_ngrams(text, n=2):
-        """
-        Generates N-Grams (Bigrams) for Fuzzy Indexing.
-        Input: "Iron" -> Output: "ir ro on"
-        """
-        if not text: return ""
-        # Remove spaces to fuzzy match across words
-        text = text.lower().replace(" ", "")
-        # Generate sliding window of 2 characters
-        ngrams = [text[i:i+n] for i in range(len(text)-n+1)]
-        return " ".join(ngrams)
 
     @staticmethod
     def parse_file_details(text):
@@ -111,7 +85,7 @@ class Media:
 
     async def save_batch(self, messages):
         """
-        Saves a list of messages with Fuzzy & Smart Metadata.
+        Saves a list of messages. No heavy N-Grams needed here anymore.
         """
         documents = []
         for message in messages:
@@ -124,37 +98,14 @@ class Media:
             clean_fname = self.clean_text(raw_fname)
             clean_cap = self.clean_text(raw_cap)
 
-            # Step A: Name Swapping (Use caption if filename is generic)
+            # Name Swapping logic
             is_generic = re.match(r'^(vid|img|tg|telegram)_\d+', clean_fname) or len(clean_fname) < 5
             if is_generic and clean_cap:
                 display_name = raw_cap.splitlines()[0][:100]
-                primary_src = clean_cap
             else:
                 display_name = raw_fname
-                primary_src = clean_fname
 
-            # Step B: Prepare Search Data
-            spaceless = primary_src.replace(" ", "")
-            meta = self.parse_file_details(primary_src + " " + clean_cap)
-            extra_text = " ".join(list(set(clean_cap.split()) - set(primary_src.split())))
-
-            # 🟢 Step C: FUZZY DATA GENERATION
-            # "Iron Man" -> "ir ro on nm ma an"
-            ngram_text = self.generate_ngrams(primary_src)
-
-            # Step D: Construct Master Search Field
-            parts = [
-                primary_src, 
-                spaceless, 
-                meta['year'], 
-                meta['quality'], 
-                " ".join(meta['languages']), 
-                " ".join(meta['episodes']), 
-                extra_text
-            ]
-            final_search_text = " ".join([p for p in parts if p]).lower()
-
-            # Create Document
+            # Construct Document
             doc = {
                 'file_id': file_info['file_id'],
                 'file_unique_id': file_info['file_unique_id'],
@@ -163,10 +114,6 @@ class Media:
                 'file_type': file_info['file_type'],
                 'mime_type': file_info['mime_type'],
                 'caption': raw_cap,
-                
-                # Indexing Fields
-                'search_text': final_search_text,
-                'ngram_text': ngram_text,  # 👈 Crucial for Fuzz
                 
                 'chat_id': message.chat.id,
                 'message_id': message.id,
@@ -188,102 +135,97 @@ class Media:
         return result == 1
 
     # ==================================================================
-    # 🔎 SEARCH LOGIC (Text + Fuzzy + Junk Filter)
+    # 🔎 SEARCH LOGIC (Atlas Fuzzy Search)
     # ==================================================================
 
     async def get_search_results(self, query):
         """
-        1. Expands Query (Lang/Desi).
-        2. Extracts Year.
-        3. Generates Query N-Grams (Fuzzy).
-        4. Runs Aggregation (Smart Scoring & Junk Filtering).
-        5. Falls back to Regex if needed.
+        Priority 1: MongoDB Atlas Fuzzy Search (Handling Typos)
+        Priority 2: Fallback to Regex (If Atlas fails or matches nothing)
         """
-        query = self.clean_text(query)
         if not query: return []
-
-        # 1. Query Expansion
-        lang_map = {'hin': 'hindi', 'tam': 'tamil', 'eng': 'english', 'tel': 'telugu'}
-        desi_map = {'seas': 'season', 'ep': 'episode', 'mov': 'movie'}
         
-        words = query.split()
-        expanded_words = set(words)
-        for word in words:
-            if word in lang_map: expanded_words.add(lang_map[word])
-            if word in desi_map: expanded_words.add(desi_map[word])
-        
-        expanded_query = " ".join(expanded_words)
+        query = self.clean_text(query)
 
-        # 2. Year Extraction
-        filter_year = None
-        year_match = re.search(r'\b(19|20)\d{2}\b', expanded_query)
-        if year_match:
-            filter_year = year_match.group(0)
-            expanded_query = expanded_query.replace(filter_year, "").strip()
-
-        # 3. Generate N-Grams for Query (For Fuzzy Match)
-        query_ngrams = self.generate_ngrams(expanded_query)
-        final_query = f"{expanded_query} {query_ngrams}"
-
-        # 4. Aggregation Pipeline
-        match_stage = {"$text": {"$search": final_query}}
-        
-        if filter_year:
-            match_stage["search_text"] = {"$regex": filter_year}
-
+        # --- 1. ATLAS SEARCH PIPELINE ---
         pipeline = [
-            {"$match": match_stage},
-            {"$project": {
-                "file_name": 1, "file_size": 1, "caption": 1, "file_id": 1, 
-                "link_id": 1, 
-                "score": {"$meta": "textScore"} # Relevance Score
-            }},
-            # 🛑 JUNK FILTER: Score > 0.6 check
-            {"$match": {"score": {"$gt": 0.6}}}, 
-            
-            {"$sort": {"score": -1}}, 
-            {"$limit": 50}
+            {
+                "$search": {
+                    "index": "default", # Must match Index Name on Website
+                    "compound": {
+                        "should": [
+                            {
+                                "autocomplete": {
+                                    "query": query,
+                                    "path": "file_name",
+                                    "fuzzy": {"maxEdits": 2}, # Handles 2 typos
+                                    "score": {"boost": {"value": 3}} # Filename match is priority
+                                }
+                            },
+                            {
+                                "text": {
+                                    "query": query,
+                                    "path": "caption",
+                                    "fuzzy": {"maxEdits": 1}
+                                }
+                            }
+                        ]
+                    }
+                }
+            },
+            {
+                "$limit": 50
+            },
+            {
+                "$project": {
+                    "file_name": 1, 
+                    "file_size": 1, 
+                    "caption": 1, 
+                    "file_id": 1, 
+                    "link_id": 1, 
+                    "score": {"$meta": "searchScore"}
+                }
+            }
         ]
 
         try:
             cursor = self.col.aggregate(pipeline)
             results = await cursor.to_list(length=50)
-            if results: return results
+            if results: 
+                return results
         except Exception as e:
-            logger.error(f"Aggregation Error: {e}")
+            logger.error(f"⚠️ Atlas Search Error (Check Index): {e}")
 
-        # 5. Fallback: Split Regex (If Fuzzy/Text fails)
-        # Check if query is too short for regex fallback (prevents garbage results)
-        if len(query) < 3:
-            return []
+        # --- 2. FALLBACK (Regex) ---
+        return await self.get_search_results_fallback(query)
 
-        raw_words = query.replace(filter_year, "") if filter_year else query
-        split_words = raw_words.split()
+    async def get_search_results_fallback(self, query):
+        """
+        Fallback method using standard Regex if Atlas fails.
+        """
+        split_words = query.split()
         if not split_words: return []
 
-        # Only create regex for words longer than 2 characters
+        # Only use words longer than 2 chars for regex
         valid_words = [re.escape(w) for w in split_words if len(w) > 2]
-        
         if not valid_words: return []
 
         regex_pattern = "|".join(valid_words)
-
-        fallback_query = {
+        
+        regex_query = {
             "$or": [
                 {"file_name": {"$regex": regex_pattern, "$options": "i"}},
-                {"search_text": {"$regex": regex_pattern, "$options": "i"}}
+                {"caption": {"$regex": regex_pattern, "$options": "i"}}
             ]
         }
-        if filter_year: fallback_query["search_text"] = {"$regex": filter_year}
-
-        cursor = self.col.find(fallback_query).limit(50)
-        return await cursor.to_list(length=50)
+        
+        return await self.col.find(regex_query).limit(50).to_list(length=50)
 
     async def get_file_by_link_id(self, link_id):
         return await self.col.find_one({"link_id": link_id})
 
     async def delete_all_files(self):
-        """Force drops collection to reset indexes/data."""
+        """Force drops collection."""
         await self.col.drop()
 
 db = Media()
