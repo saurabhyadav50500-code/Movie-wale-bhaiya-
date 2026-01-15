@@ -1,8 +1,10 @@
 import math
+import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 from pyrogram.errors import MessageNotModified
 from database.ia_filterdb import db
+from database.analytics import analytics  # 👈 Analytics Import
 from utils import get_size
 
 # --- CONFIGURATION ---
@@ -91,7 +93,22 @@ async def auto_filter(client: Client, message: Message):
     if not client.me:
         await client.get_me()
 
+    # Database Search
     files = await db.get_search_results(query)
+
+    # --- 📊 ANALYTICS LOGGING (New) ---
+    # Search data background me save hoga
+    if query:
+        asyncio.create_task(
+            analytics.log_search(
+                raw_query=message.text, 
+                cleaned_query=query, 
+                results_count=len(files), 
+                user_id=message.from_user.id, 
+                chat_id=message.chat.id
+            )
+        )
+    # ----------------------------------
 
     if not files:
         return 
@@ -145,35 +162,24 @@ async def file_delivery_handler(client: Client, message: Message):
     """
     Handles deep link delivery. High priority.
     """
-    # Debug Print: Console me check karein kya ye print ho raha hai?
-    print(f"DEBUG: Start Command Received: {message.text}")
-
-    # Agar sirf /start hai to ignore karo (Bot.py sambhalega)
     if len(message.command) < 2:
         return
     
     payload = message.command[1] # "file_xyz123"
     
-    # Check karein kya ye file request hai?
     if not payload.startswith("file_"):
         return
 
     try:
-        # "file_" hata kar ID nikalein
         link_id = payload.split("file_", 1)[1]
     except IndexError:
         return await message.reply("❌ Invalid Link Format")
 
-    print(f"DEBUG: Searching for Link ID: {link_id}")
-
-    # Database Search
     file_info = await db.get_file_by_link_id(link_id)
     
     if not file_info:
-        print("DEBUG: File Not Found in DB")
         return await message.reply("❌ File not found (Deleted or Invalid).")
 
-    # Message Bhejein
     status_msg = await message.reply("📂 **Found File! Sending now...**")
 
     try:
@@ -183,9 +189,15 @@ async def file_delivery_handler(client: Client, message: Message):
             caption=file_info['caption'] or "",
         )
         await status_msg.delete()
+    
     except Exception as e:
-        print(f"DEBUG: Error Sending File: {e}")
-        await status_msg.edit(f"❌ Error sending file: {str(e)}")
+        print(f"Error Sending File: {e}")
+        # Auto Delete Logic for Invalid Files (Optional but Recommended)
+        if "MEDIA_EMPTY" in str(e) or "400" in str(e):
+             await db.col.delete_one({"link_id": link_id})
+             await status_msg.edit("❌ **File Expired:** This file was deleted from Telegram servers.")
+        else:
+             await status_msg.edit(f"❌ Error sending file: {str(e)}")
 
 
 # ==========================================
