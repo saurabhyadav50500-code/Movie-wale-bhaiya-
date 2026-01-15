@@ -11,13 +11,15 @@ async def delete_all_handler(bot, message):
     """
     await message.reply_text(
         text=(
-            "⚠️ WARNING: Kya aap Saara Data Delete karna chahte hain?\n"
-            "(Index ki gai file delete )"
+            "⚠️ **WARNING: SYSTEM RESET**\n\n"
+            "Kya aap sach mein **SAARA DATA** delete karna chahte hain?\n"
+            "Isse Index ki gayi **SABHI FILES** delete ho jayengi.\n\n"
+            "ℹ️ **Note:** Agar Search kaam nahi kar raha, to ye zaroori hai."
         ),
         reply_markup=InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("Delete all", callback_data="delete_all_confirm"),
-                InlineKeyboardButton("cancel", callback_data="delete_all_cancel")
+                InlineKeyboardButton("🧨 YES, DELETE ALL", callback_data="delete_all_confirm"),
+                InlineKeyboardButton("❌ Cancel", callback_data="delete_all_cancel")
             ]
         ]),
         quote=True
@@ -38,15 +40,27 @@ async def delete_callback_handler(bot, query: CallbackQuery):
         return
 
     if data == "delete_all_confirm":
-        await query.message.edit("⏳ **Deleting All Files...**\nKripya wait karein...")
+        await query.message.edit("⏳ **Deleting All Files...**\n(Database Cleaning in progress...)")
         
         try:
-            # Database function call karein
+            # 1. Database Delete Call
             await db.delete_all_files()
             
-            await query.message.edit(
-                "🗑️ **Successfully Deleted All Files!**\n"
-                "Database ab poori tarah khaali (Clean) hai."
-            )
+            # 2. Verification (Check karein ki sach me delete hua ya nahi)
+            total_remaining = await db.col.count_documents({})
+            
+            if total_remaining == 0:
+                await query.message.edit(
+                    "🗑️ **SUCCESSFULLY DELETED!**\n\n"
+                    "✅ Database ab bilkul **KHALI (0 Files)** hai.\n"
+                    "🚀 Ab aap `/index` command se dobara Indexing shuru kar sakte hain."
+                )
+            else:
+                await query.message.edit(
+                    f"⚠️ **Error:** Delete failed.\n"
+                    f"Abhi bhi **{total_remaining}** files bachi hain.\n"
+                    "Kripya dobara try karein."
+                )
+                
         except Exception as e:
             await query.message.edit(f"❌ Error aagaya: {str(e)}")
