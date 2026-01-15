@@ -1,9 +1,12 @@
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from info import API_ID, API_HASH, BOT_TOKEN
 from flask import Flask
 import threading
 import os
+
+# 👇 DATABASE IMPORT (Zaroori hai Fuzz Index banane ke liye)
+from database.ia_filterdb import db
 
 # ==========================================
 # PART 1: WEBSERVER
@@ -37,9 +40,8 @@ app = Client(
 # --- START COMMAND ---
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
-    # 👇 YAHAN CHECK HAI:
+    # 👇 DEEP LINK CHECK
     # Agar message "/start file_xyz" hai, to ye function ruk jayega
-    # Aur control autofilter.py ke paas chala jayega.
     if len(message.command) > 1:
         return 
 
@@ -82,6 +84,7 @@ async def about_callback(client, callback_query):
         "------------------\n"
         "🔹 **Language:** Python (Pyrogram)\n"
         "🔹 **Function:** Auto Filter & File Store\n"
+        "🔹 **Search:** Fuzzy Logic Enabled 🧠\n"
         "🔹 **Developer:** You"
     )
     
@@ -93,6 +96,26 @@ async def about_callback(client, callback_query):
 async def respond_to_hii(client, message):
     await message.reply_text("Hello ji! Kaise ho? 😃")
 
-# --- RUN ---
-print("Bot Started... Ab Plugins bhi load honge! 🟢")
-app.run()
+# ==========================================
+# PART 3: EXECUTION (Run with Indexes)
+# ==========================================
+
+async def start_bot():
+    print("Bot Starting...")
+    
+    # 1. Start Pyrogram Client
+    await app.start()
+    
+    # 2. Create Database Indexes (Ye line Fuzz Search ke liye zaroori hai)
+    print("⏳ Creating Indexes for Fuzz Search...")
+    await db.ensure_indexes()
+    print("✅ Indexes Created Successfully!")
+    
+    print("🟢 Bot is Online! (Idling now...)")
+    await idle() # Bot ko rook ke rakhta hai jab tak manually stop na karein
+    
+    await app.stop()
+
+if __name__ == "__main__":
+    # app.run() ki jagah hum apna custom start function use karenge
+    app.run(start_bot())
