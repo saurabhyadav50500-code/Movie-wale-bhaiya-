@@ -12,213 +12,184 @@ class Media:
         self.db = self.client[DATABASE_NAME]
         self.col = self.db[COLLECTION_NAME]
 
+    async def ensure_indexes(self):
+        """
+        Creates the Text Index for Fuzzy & Smart Search.
+        Weights determine priority: Exact Name (10) > Meta (5) > Fuzzy (3).
+        """
+        try:
+            await self.col.create_index(
+                [
+                    ("file_name", "text"),
+                    ("search_text", "text"),
+                    ("ngram_text", "text"),  # 👈 New Fuzzy Field
+                    ("caption", "text")
+                ],
+                weights={
+                    "file_name": 10,
+                    "search_text": 5,
+                    "ngram_text": 3,         # 👈 Fuzzy Weight
+                    "caption": 1
+                },
+                name="SmartFuzzyIndex"
+            )
+            logger.info("✅ Smart Fuzzy Index created successfully.")
+        except Exception as e:
+            logger.error(f"❌ Error creating index: {e}")
+
     # ==================================================================
-    # 🧠 SMART INDEXING HELPERS (Clean, Parse, Analyze)
+    # 🧠 SMART INDEXING HELPERS
     # ==================================================================
 
     @staticmethod
     def clean_text(text):
-        """
-        Advanced cleaning: Removes extensions, dots, usernames, links.
-        Converts Roman Numerals (I-V) to Digits.
-        """
-        if not text:
-            return ""
-
+        if not text: return ""
         text = text.lower()
-
-        # 1. Remove File Extension (e.g., .mkv, .mp4 at the end)
         text = re.sub(r'\.[a-z0-9]{2,5}$', '', text)
-
-        # 2. Remove Usernames (@user) and Links (http/www)
         text = re.sub(r'@\w+', '', text)
         text = re.sub(r'https?://\S+|www\.\S+', '', text)
-
-        # 3. Replace Dots, Underscores, Brackets with Spaces
         text = re.sub(r'[._\-\[\]\(\)\{\}]', ' ', text)
-
-        # 4. Roman Numeral Fix (I, II, III, IV, V) -> (1, 2, 3, 4, 5)
-        # Using word boundaries (\b) to ensure we don't change "LIVE" to "L4E"
-        roman_map = {
-            r'\bi\b': ' 1 ',
-            r'\bii\b': ' 2 ',
-            r'\biii\b': ' 3 ',
-            r'\biv\b': ' 4 ',
-            r'\bv\b': ' 5 '
-        }
+        
+        roman_map = {r'\bi\b': ' 1 ', r'\bii\b': ' 2 ', r'\biii\b': ' 3 ', r'\biv\b': ' 4 ', r'\bv\b': ' 5 '}
         for pattern, replacement in roman_map.items():
             text = re.sub(pattern, replacement, text)
+            
+        return re.sub(r'\s+', ' ', text).strip()
 
-        # 5. Cleanup excessive whitespace
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text
+    @staticmethod
+    def generate_ngrams(text, n=2):
+        """
+        Generates N-Grams (Bigrams) for Fuzzy Indexing.
+        Input: "Iron" -> Output: "ir ro on"
+        """
+        if not text: return ""
+        text = text.lower().replace(" ", "") # Remove spaces for continuity
+        ngrams = [text[i:i+n] for i in range(len(text)-n+1)]
+        return " ".join(ngrams)
 
     @staticmethod
     def parse_file_details(text):
-        """
-        Extracts metadata: Year, Quality, Episodes, Languages.
-        Handles Multi-Audio logic.
-        """
         text = text.lower()
-        meta = {
-            "quality": "",
-            "year": "",
-            "languages": set(),
-            "episodes": set()
-        }
-
-        # --- A. Quality & Year ---
-        # Match 480p, 720p, 1080p, 2160p, 4k
+        meta = {"quality": "", "year": "", "languages": set(), "episodes": set()}
+        
         qualities = re.findall(r'\b(480p|720p|1080p|2160p|4k)\b', text)
-        if qualities:
-            meta["quality"] = qualities[0]
-
-        # Match Year (1990-2029)
+        if qualities: meta["quality"] = qualities[0]
+        
         years = re.findall(r'\b(19\d{2}|20[0-2]\d)\b', text)
-        if years:
-            meta["year"] = years[0]
+        if years: meta["year"] = years[0]
 
-        # --- B. Episode Expansion ---
-        # Matches S01E01, S1E1, S1 E1
         ep_match = re.search(r'\bs(\d+)\s*e(\d+)\b', text)
         if ep_match:
-            season, episode = ep_match.groups()
-            # Generate variations for search: "s01e01", "e1", "episode 1"
-            meta["episodes"].add(f"s{season}e{episode}")
-            meta["episodes"].add(f"e{int(episode)}")
-            meta["episodes"].add(f"episode {int(episode)}")
-            meta["episodes"].add(f"season {int(season)}")
+            s, e = ep_match.groups()
+            meta["episodes"].update([f"s{s}e{e}", f"e{int(e)}", f"episode {int(e)}"])
 
-        # --- C. Language & Multi-Audio ---
-        common_langs = [
-            "hindi", "english", "tamil", "telugu", "malayalam", 
-            "kannada", "bengali", "punjabi", "marathi", "gujarati"
-        ]
-        
-        for lang in common_langs:
-            if lang in text:
-                meta["languages"].add(lang)
-
-        # Smart Logic: If Multi/Dual/Org/Sub found, but Hindi not found -> Add Hindi
-        # (Assuming target audience is Indian users mostly)
-        keywords = ["multi", "dual", "org", "sub"]
-        if any(k in text for k in keywords):
-            meta["languages"].add("hindi") # Implicitly add Hindi for Dual Audio
+        for lang in ["hindi", "english", "tamil", "telugu", "malayalam", "kannada"]:
+            if lang in text: meta["languages"].add(lang)
+            
+        if any(k in text for k in ["multi", "dual", "org", "sub"]):
+            meta["languages"].add("hindi")
 
         return meta
 
     # ==================================================================
-    # 💾 DATABASE OPERATIONS (Save Batch & Search)
+    # 💾 DATABASE OPERATIONS
     # ==================================================================
 
     async def save_batch(self, messages):
-        """
-        Process a list of Pyrogram Messages, apply intelligent indexing, 
-        and save to MongoDB using bulk write.
-        """
         documents = []
-
         for message in messages:
-            # 1. Basic Extraction
             file_info = get_file_details(message)
-            if not file_info:
-                continue
+            if not file_info: continue
 
-            # Original raw strings
-            raw_filename = file_info['file_name'] or ""
-            raw_caption = message.caption or ""
+            raw_fname = file_info['file_name'] or ""
+            raw_cap = message.caption or ""
+            
+            clean_fname = self.clean_text(raw_fname)
+            clean_cap = self.clean_text(raw_cap)
 
-            # 2. Clean Texts
-            clean_fname = self.clean_text(raw_filename)
-            clean_cap = self.clean_text(raw_caption)
-
-            # --- STEP A: NAME SWAPPING (Display Logic) ---
-            # If filename is junk (VID_..., IMG_..., or too short), use Caption
+            # Step A: Name Swapping
             is_generic = re.match(r'^(vid|img|tg|telegram)_\d+', clean_fname) or len(clean_fname) < 5
-            
             if is_generic and clean_cap:
-                display_name = raw_caption.splitlines()[0][:100] # Use first line of caption
-                primary_search_source = clean_cap
+                display_name = raw_cap.splitlines()[0][:100]
+                primary_src = clean_cap
             else:
-                display_name = raw_filename
-                primary_search_source = clean_fname
+                display_name = raw_fname
+                primary_src = clean_fname
 
-            # --- STEP B: SPACELESS GENERATION ---
-            spaceless_name = primary_search_source.replace(" ", "")
+            # Step B: Helpers
+            spaceless = primary_src.replace(" ", "")
+            meta = self.parse_file_details(primary_src + " " + clean_cap)
+            extra_text = " ".join(list(set(clean_cap.split()) - set(primary_src.split())))
 
-            # --- STEP C: SMART MERGE (Caption Analysis) ---
-            # Find words in caption that are NOT in filename
-            fname_words = set(primary_search_source.split())
-            cap_words = set(clean_cap.split())
-            extra_keywords = list(cap_words - fname_words)
-            extra_text = " ".join(extra_keywords)
+            # 🟢 Step C: FUZZY DATA (N-Grams)
+            # "Iron Man" -> "ir ro on nm ma an"
+            ngram_text = self.generate_ngrams(primary_src)
 
-            # --- STEP D: METADATA PARSING ---
-            # Extract Years, Quality, Language from the richest source
-            meta = self.parse_file_details(primary_search_source + " " + clean_cap)
-            
-            # --- STEP E: MASTER SEARCH FIELD CONSTRUCTION ---
-            # Combine everything into one super-searchable string
-            search_text_parts = [
-                primary_search_source,      # Main Name (Cleaned)
-                spaceless_name,             # Spaceless version
-                meta['year'],               # 2024
-                meta['quality'],            # 1080p
-                " ".join(meta['languages']),# hindi english
-                " ".join(meta['episodes']), # s01e01 e1
-                extra_text                  # Unique words from caption
-            ]
-            
-            # Join and remove duplicate spaces
-            final_search_text = " ".join([p for p in search_text_parts if p]).lower()
+            # Step D: Master Search Field
+            parts = [primary_src, spaceless, meta['year'], meta['quality'], 
+                     " ".join(meta['languages']), " ".join(meta['episodes']), extra_text]
+            final_search_text = " ".join([p for p in parts if p]).lower()
 
-            # Generate IDs
-            link_id = generate_link_id()
-
-            # Create Document
             doc = {
                 'file_id': file_info['file_id'],
                 'file_unique_id': file_info['file_unique_id'],
-                'file_name': display_name,  # Shows in Buttons
+                'file_name': display_name,
                 'file_size': file_info['file_size'],
                 'file_type': file_info['file_type'],
                 'mime_type': file_info['mime_type'],
-                'caption': raw_caption,     # Original Caption for sending
+                'caption': raw_cap,
                 
-                # Indexing Fields
-                'search_text': final_search_text, # The Brain 🧠
+                # Search Fields
+                'search_text': final_search_text,
+                'ngram_text': ngram_text,  # 👈 Saved for Fuzzy Search
                 'chat_id': message.chat.id,
                 'message_id': message.id,
-                'link_id': link_id
+                'link_id': generate_link_id()
             }
             documents.append(doc)
 
-        # Bulk Insert (Ordered=False to ignore duplicates and continue)
         if documents:
             try:
                 await self.col.insert_many(documents, ordered=False)
                 return len(documents)
             except motor.motor_asyncio.AsyncIOMotorerrors.BulkWriteError as e:
-                # Return count of successfully inserted documents
                 return e.details.get('nInserted', 0)
         return 0
 
     async def save_file(self, message):
-        """Wrapper for saving a single file using the batch logic."""
-        result = await self.save_batch([message])
-        return result == 1
+        return await self.save_batch([message]) == 1
 
     async def get_search_results(self, query):
         """
-        Search using the new 'search_text' field.
+        Searches using Text Index (Exact + Fuzzy N-Grams).
         """
-        # Clean the user's query first (convert roman, remove dots)
-        cleaned_query = self.clean_text(query)
-        regex = {"$regex": cleaned_query, "$options": "i"}
+        query = self.clean_text(query)
+        if not query: return []
 
-        # Search specifically in the Master Search Field
-        cursor = self.col.find({"search_text": regex})
-        return await cursor.to_list(length=100)
+        # 1. Generate N-Grams for Query to match typos
+        query_ngrams = self.generate_ngrams(query)
+        
+        # 2. Combine: "Query" OR "q u e r y n g r a m s"
+        final_query = f"{query} {query_ngrams}"
+
+        # 3. Aggregation for Scoring
+        pipeline = [
+            {"$match": {"$text": {"$search": final_query}}},
+            {"$project": {
+                "file_name": 1, "file_size": 1, "caption": 1, "file_id": 1, "link_id": 1,
+                "score": {"$meta": "textScore"} # Sort by relevance
+            }},
+            {"$sort": {"score": -1}},
+            {"$limit": 50}
+        ]
+
+        try:
+            cursor = self.col.aggregate(pipeline)
+            return await cursor.to_list(length=50)
+        except Exception as e:
+            logger.error(f"Search Error: {e}")
+            # Fallback to simple Regex if Index fails/not exists
+            return await self.col.find({"search_text": {"$regex": query, "$options": "i"}}).to_list(length=50)
 
     async def get_file_by_link_id(self, link_id):
         return await self.col.find_one({"link_id": link_id})
