@@ -5,8 +5,9 @@ from flask import Flask
 import threading
 import os
 
-# 👇 DATABASE IMPORT (Zaroori hai Fuzz Index banane ke liye)
+# 👇 DATABASE IMPORTS
 from database.ia_filterdb import db
+from database.analytics import analytics  # 👈 NEW: Analytics Import
 
 # ==========================================
 # PART 1: WEBSERVER
@@ -41,11 +42,9 @@ app = Client(
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
     # 👇 DEEP LINK CHECK
-    # Agar message "/start file_xyz" hai, to ye function ruk jayega
     if len(message.command) > 1:
         return 
 
-    # Bot ka username nikalein
     bot_info = await client.get_me()
     username = bot_info.username
     
@@ -84,7 +83,7 @@ async def about_callback(client, callback_query):
         "------------------\n"
         "🔹 **Language:** Python (Pyrogram)\n"
         "🔹 **Function:** Auto Filter & File Store\n"
-        "🔹 **Search:** Fuzzy Logic Enabled 🧠\n"
+        "🔹 **Search:** Fuzzy Logic + Analytics 📊\n"
         "🔹 **Developer:** You"
     )
     
@@ -106,16 +105,21 @@ async def start_bot():
     # 1. Start Pyrogram Client
     await app.start()
     
-    # 2. Create Database Indexes (Ye line Fuzz Search ke liye zaroori hai)
-    print("⏳ Creating Indexes for Fuzz Search...")
+    # 2. Create Database Indexes
+    print("⏳ Creating Indexes...")
+    
+    # A. Search Index (Fuzzy Logic)
     await db.ensure_indexes()
-    print("✅ Indexes Created Successfully!")
+    
+    # B. Analytics Index (Reporting) 👈 NEW ADDITION
+    await analytics.ensure_indexes()
+    
+    print("✅ All Indexes Created Successfully!")
     
     print("🟢 Bot is Online! (Idling now...)")
-    await idle() # Bot ko rook ke rakhta hai jab tak manually stop na karein
+    await idle() 
     
     await app.stop()
 
 if __name__ == "__main__":
-    # app.run() ki jagah hum apna custom start function use karenge
     app.run(start_bot())
