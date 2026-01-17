@@ -3,8 +3,11 @@ import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 from pyrogram.errors import MessageNotModified
+
+# Database Imports
 from database.ia_filterdb import db
 from database.analytics import analytics
+from database.users_chats_db import db_users  # 👈 NEW: Import Caching DB
 from utils import get_size
 
 # --- CONFIGURATION ---
@@ -49,7 +52,6 @@ async def btn_parser(search_id, files, client, offset=0):
     nav_buttons = []
 
     if offset >= BUTTONS_PER_PAGE:
-        # 👇 FIX: Using Integer ID in callback
         nav_buttons.append(
             InlineKeyboardButton(
                 text="⬅️ Back",
@@ -65,7 +67,6 @@ async def btn_parser(search_id, files, client, offset=0):
     )
 
     if end_index < total_files:
-        # 👇 FIX: Using Integer ID in callback
         nav_buttons.append(
             InlineKeyboardButton(
                 text="Next ➡️",
@@ -98,35 +99,43 @@ async def auto_filter(client: Client, message: Message):
     if not client.me:
         await client.get_me()
 
-    # --- 🚀 PARALLEL EXECUTION (Speed Boost) ---
-    # Hum Database se "Query Save" aur "File Search" dono ek sath karenge
-    # Taaki wait time kam ho jaye.
+    # 🚀 STEP 1: CHECK GROUP SETTINGS (RAM CACHE)
+    # This hits the LRU Cache first. If cached, it returns instantly (0ms latency).
+    # If not cached, it fetches from DB and saves to RAM.
+    settings = await db_users.get_group_status(message.chat.id)
     
-    # Task 1: Search Files
+    # Optional: Logic to stop if bot is disabled in this group
+    # if not settings.get('is_enabled', True):
+    #     return
+
+    # 🚀 STEP 2: PARALLEL EXECUTION (Speed Boost)
+    # Search Files & Save Query to DB simultaneously
+    
+    # Task A: Search Files
     search_task = asyncio.create_task(db.get_search_results(query))
     
-    # Task 2: Save Query to DB (Get Short ID)
+    # Task B: Save Query to DB (Get Short ID)
     save_task = asyncio.create_task(db.save_search_query(query, message.from_user.id))
 
-    # Task 3: Log Analytics (Background - No Await needed immediately)
+    # Task C: Log Analytics (Background - No Await needed immediately)
     asyncio.create_task(
         analytics.log_search(
             raw_query=message.text, 
             cleaned_query=query, 
-            results_count=0, # Will update later if needed, mostly for tracking hits
+            results_count=0, 
             user_id=message.from_user.id, 
             chat_id=message.chat.id
         )
     )
 
-    # Wait for both critical tasks to finish
+    # Wait for both critical tasks (A & B) to finish
     files, search_id = await asyncio.gather(search_task, save_task)
 
     if not files:
         return 
 
     if not search_id:
-        # Agar ID generation fail hui (rare case)
+        # Rare case if ID generation fails
         return await message.reply("❌ Database Error. Please try again.")
 
     # Generate Buttons using the Short Integer ID
@@ -148,14 +157,12 @@ async def next_page_handler(client: Client, callback: CallbackQuery):
     
     try:
         # Data format: next_{search_id}_{offset}
-        # Example: next_55_10
         _, str_id, str_offset = data.split("_", 2)
         offset = int(str_offset)
     except (ValueError, IndexError):
         return await callback.answer("❌ Error parsing data.", show_alert=True)
 
     # 🛡️ SAFETY CHECK: Handle Invalid/None IDs
-    # Agar user bahut purane message pe click kare ya DB reset ho gaya ho
     if not str_id.isdigit():
          return await callback.answer("❌ Invalid Search ID.", show_alert=True)
          
@@ -213,6 +220,9 @@ async def file_delivery_handler(client: Client, message: Message):
     if not file_info:
         return await message.reply("❌ File not found (Deleted or Invalid).")
 
+    # Add User to DB (Optional: Track users who start bot)
+    await db_users.add_user(message.from_user.id, message.from_user.first_name)
+
     status_msg = await message.reply("📂 **Found File! Sending now...**")
 
     try:
@@ -225,7 +235,7 @@ async def file_delivery_handler(client: Client, message: Message):
     
     except Exception as e:
         print(f"Error Sending File: {e}")
-        # Agar Telegram se file delete ho gayi hai to Database se bhi uda do
+        # If deleted from Telegram, remove from DB
         if "MEDIA_EMPTY" in str(e) or "400" in str(e):
              await db.col.delete_one({"link_id": link_id})
              await status_msg.edit("❌ **File Expired:** This file was deleted from Telegram servers.")
