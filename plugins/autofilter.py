@@ -280,7 +280,7 @@ async def pages_handler(client, callback):
     await callback.answer("This is the page counter.", show_alert=True)
 
 # ==========================================
-# 4. FILE DELIVERY (Deep Link)
+# 4. FILE DELIVERY (DEEP LINK - FIXED) 🛠️
 # ==========================================
 @Client.on_message(filters.command("start") & filters.private)
 async def file_delivery_handler(client: Client, message: Message):
@@ -297,26 +297,47 @@ async def file_delivery_handler(client: Client, message: Message):
     except IndexError:
         return 
 
+    # 1. Fetch File Info
     file_info = await db.get_file_by_link_id(link_id)
     
     if not file_info:
         return await message.reply("❌ File not found (Deleted or Invalid).")
 
-    # Add user to Users DB (Cache)
+    # 2. Add User to DB (Cache)
     await db_users.add_user(message.from_user.id, message.from_user.first_name)
 
     status_msg = await message.reply("📂 **Sending File...**")
 
+    # 3. SEND FILE (Smart Method)
     try:
-        await client.send_cached_media(
-            chat_id=message.from_user.id,
-            file_id=file_info['file_id'],
-            caption=file_info['caption'] or ""
-        )
-        await status_msg.delete()
-    except Exception as e:
-        if "MEDIA_EMPTY" in str(e) or "400" in str(e):
-             await db.col.delete_one({"link_id": link_id})
-             await status_msg.edit("❌ **File Expired:** Deleted from Telegram.")
+        # Strategy A: Copy Message (Best - Preserves file completely)
+        chat_id = file_info.get('chat_id')
+        msg_id = file_info.get('message_id')
+        
+        if chat_id and msg_id:
+            await client.copy_message(
+                chat_id=message.from_user.id,
+                from_chat_id=chat_id,
+                message_id=msg_id,
+                caption=file_info.get('caption', "")[:1024]
+            )
         else:
-             await status_msg.edit(f"❌ Error: {e}")
+            # Strategy B: Send Cached Media (Fallback)
+            await client.send_cached_media(
+                chat_id=message.from_user.id,
+                file_id=file_info['file_id'],
+                caption=file_info.get('caption', "")[:1024]
+            )
+            
+        await status_msg.delete()
+
+    except Exception as e:
+        err = str(e)
+        print(f"Send Error: {err}")
+        
+        # If file is deleted from Telegram, remove from DB to clean up
+        if "MEDIA_EMPTY" in err or "400" in err or "ID_INVALID" in err:
+             await db.col.delete_one({"link_id": link_id})
+             await status_msg.edit("❌ **File Expired:** Original file was deleted.")
+        else:
+             await status_msg.edit(f"❌ Error: {err}")
