@@ -56,7 +56,7 @@ async def arrange_buttons(search_id, all_files, offset, active_type, bot_usernam
     Constructs the specific button layout requested:
     1. File Results
     2. Filters [Vid] [Doc] [All]
-    3. Ads/Premium
+    3. Free Premium Button
     4. Pagination
     """
     # 1. Filter & Slice Files
@@ -103,7 +103,7 @@ async def arrange_buttons(search_id, all_files, offset, active_type, bot_usernam
     ]
     buttons.append(filter_buttons)
 
-    # --- ROW 3: PREMIUM / AD ---
+    # --- ROW 3: FREE PREMIUM BUTTON (Requested) ---
     buttons.append([
         InlineKeyboardButton("✨ Free Premium", url="https://t.me/YourChannelLink")
     ])
@@ -181,13 +181,14 @@ async def auto_filter(client: Client, message: Message):
     files = results[1]
     search_id = results[2]
 
-    # Optional: Check if bot is disabled in group
+    # Check if bot is disabled in group (Optional logic)
     # if not settings.get('is_enabled', True): return
 
     if not files:
         return # No results found, stay silent
 
     if not search_id:
+        # If ID generation fails (rare)
         return await message.reply("❌ Database Error. Please try again.")
 
     if not client.me:
@@ -280,9 +281,10 @@ async def pages_handler(client, callback):
     await callback.answer("This is the page counter.", show_alert=True)
 
 # ==========================================
-# 4. FILE DELIVERY (DEEP LINK - FIXED) 🛠️
+# 4. FILE DELIVERY (DEEP LINK - HIGH PRIORITY) 🚀
 # ==========================================
-@Client.on_message(filters.command("start") & filters.private)
+# Group -10 ensures this runs before other handlers
+@Client.on_message(filters.command("start") & filters.private, group=-10)
 async def file_delivery_handler(client: Client, message: Message):
     if len(message.command) < 2:
         return
@@ -308,21 +310,28 @@ async def file_delivery_handler(client: Client, message: Message):
 
     status_msg = await message.reply("📂 **Sending File...**")
 
-    # 3. SEND FILE (Smart Method)
+    # 3. SEND FILE (Robust Method)
     try:
-        # Strategy A: Copy Message (Best - Preserves file completely)
+        # Strategy A: Copy Message (Best - Preserves file attributes)
         chat_id = file_info.get('chat_id')
         msg_id = file_info.get('message_id')
         
+        sent = False
+        
         if chat_id and msg_id:
-            await client.copy_message(
-                chat_id=message.from_user.id,
-                from_chat_id=chat_id,
-                message_id=msg_id,
-                caption=file_info.get('caption', "")[:1024]
-            )
-        else:
-            # Strategy B: Send Cached Media (Fallback)
+            try:
+                await client.copy_message(
+                    chat_id=message.from_user.id,
+                    from_chat_id=chat_id,
+                    message_id=msg_id,
+                    caption=file_info.get('caption', "")[:1024]
+                )
+                sent = True
+            except Exception as e:
+                print(f"Copy Failed (Trying fallback): {e}")
+
+        # Strategy B: Send Cached Media (Fallback if Copy fails or Original deleted)
+        if not sent:
             await client.send_cached_media(
                 chat_id=message.from_user.id,
                 file_id=file_info['file_id'],
@@ -338,6 +347,6 @@ async def file_delivery_handler(client: Client, message: Message):
         # If file is deleted from Telegram, remove from DB to clean up
         if "MEDIA_EMPTY" in err or "400" in err or "ID_INVALID" in err:
              await db.col.delete_one({"link_id": link_id})
-             await status_msg.edit("❌ **File Expired:** Original file was deleted.")
+             await status_msg.edit("❌ **File Expired:** Original file was deleted from Telegram.")
         else:
-             await status_msg.edit(f"❌ Error: {err}")
+             await status_msg.edit(f"❌ Error sending file: {err}")
