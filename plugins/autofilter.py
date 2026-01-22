@@ -17,7 +17,7 @@ BUTTONS_PER_PAGE = 10
 SPAM_CACHE = {}  # Stores user_id: timestamp
 
 # ==========================================
-# 🛠️ HELPER FUNCTIONS (Layout & Logic)
+# 🛠️ HELPER FUNCTIONS (Logic & Layout)
 # ==========================================
 
 def is_spam(user_id):
@@ -39,9 +39,10 @@ def filter_files_by_type(files, active_type):
     filtered = []
     for file in files:
         # Determine type based on mime_type or file_type attribute
-        mime = file.get("mime_type", "").lower()
-        f_type = file.get("file_type", "").lower()
+        mime = str(file.get("mime_type", "")).lower()
+        f_type = str(file.get("file_type", "")).lower()
         
+        # Check if it's a video
         is_video = "video" in mime or f_type == "video"
         
         if active_type == "video" and is_video:
@@ -53,11 +54,10 @@ def filter_files_by_type(files, active_type):
 
 async def arrange_buttons(search_id, all_files, offset, active_type, bot_username):
     """
-    Constructs the specific button layout requested:
+    Constructs the specific button layout:
     1. File Results
     2. Filters [Vid] [Doc] [All]
-    3. Free Premium Button
-    4. Pagination
+    3. Pagination
     """
     # 1. Filter & Slice Files
     filtered_files = filter_files_by_type(all_files, active_type)
@@ -78,7 +78,7 @@ async def arrange_buttons(search_id, all_files, offset, active_type, bot_usernam
         f_name = file.get('file_name', 'Unknown')
         f_size = get_size(file.get('file_size', 0))
         
-        # Truncate Long Names
+        # Truncate Long Names to fit button
         if len(f_name) > 30:
             f_name = f_name[:27] + "..."
             
@@ -103,12 +103,7 @@ async def arrange_buttons(search_id, all_files, offset, active_type, bot_usernam
     ]
     buttons.append(filter_buttons)
 
-    # --- ROW 3: FREE PREMIUM BUTTON (Requested) ---
-    buttons.append([
-        InlineKeyboardButton("✨ Free Premium", url="https://t.me/YourChannelLink")
-    ])
-
-    # --- ROW 4: PAGINATION ---
+    # --- ROW 3: PAGINATION ---
     total_pages = math.ceil(total_files / BUTTONS_PER_PAGE)
     current_page = math.ceil(offset / BUTTONS_PER_PAGE) + 1
     
@@ -150,7 +145,7 @@ async def arrange_buttons(search_id, all_files, offset, active_type, bot_usernam
     return InlineKeyboardMarkup(buttons), total_files
 
 # ==========================================
-# 1. MAIN SEARCH HANDLER (Optimized)
+# 1. MAIN SEARCH HANDLER (Optimized & Parallel)
 # ==========================================
 @Client.on_message(filters.text & filters.group)
 async def auto_filter(client: Client, message: Message):
@@ -159,7 +154,7 @@ async def auto_filter(client: Client, message: Message):
     if not query or len(query) < 2 or query.startswith("/"):
         return
 
-    # 🚀 PARALLEL EXECUTION
+    # 🚀 PARALLEL EXECUTION (Asyncio Gather)
     # We fetch Group Settings, Search Results, and Save Query at the exact same time.
     
     tasks = [
@@ -174,21 +169,20 @@ async def auto_filter(client: Client, message: Message):
         user_id=message.from_user.id, chat_id=message.chat.id
     ))
 
-    # Wait for critical data
+    # Wait for critical data to arrive
     results = await asyncio.gather(*tasks)
     
     settings = results[0]
     files = results[1]
     search_id = results[2]
 
-    # Check if bot is disabled in group (Optional logic)
+    # Optional: Check if bot is disabled in group (Using Cached Settings)
     # if not settings.get('is_enabled', True): return
 
     if not files:
         return # No results found, stay silent
 
     if not search_id:
-        # If ID generation fails (rare)
         return await message.reply("❌ Database Error. Please try again.")
 
     if not client.me:
@@ -228,7 +222,7 @@ async def spage_handler(client: Client, callback: CallbackQuery):
     except Exception:
         return 
 
-    # 3. Fetch Query from DB
+    # 3. Fetch Query from DB (Using ID)
     query = await db.get_search_query(search_id)
     
     if not query:
@@ -236,7 +230,7 @@ async def spage_handler(client: Client, callback: CallbackQuery):
             "⚠️ **Search Expired**\nPlease request the movie again."
         )
 
-    # 4. Fetch Files
+    # 4. Fetch Files (Fresh from DB)
     files = await db.get_search_results(query)
     
     if not files:
@@ -283,7 +277,7 @@ async def pages_handler(client, callback):
 # ==========================================
 # 4. FILE DELIVERY (DEEP LINK - HIGH PRIORITY) 🚀
 # ==========================================
-# Group -10 ensures this runs before other handlers
+# Group -10 ensures this runs before other handlers to catch /start
 @Client.on_message(filters.command("start") & filters.private, group=-10)
 async def file_delivery_handler(client: Client, message: Message):
     if len(message.command) < 2:
