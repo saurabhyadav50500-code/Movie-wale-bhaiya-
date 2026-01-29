@@ -3,7 +3,7 @@ import logging
 import motor.motor_asyncio
 from datetime import datetime
 from info import MONGO_URI, DATABASE_NAME, COLLECTION_NAME
-from utils import get_file_details, generate_link_id
+from utils import get_file_details, generate_link_id, LANG_PATTERNS, QUAL_PATTERNS
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ class Media:
         return meta
 
     # ==================================================================
-    # 💾 DATABASE OPERATIONS
+    # 💾 DATABASE OPERATIONS (Save Logic)
     # ==================================================================
 
     async def save_batch(self, messages):
@@ -207,100 +207,69 @@ class Media:
         return result == 1
 
     # ==================================================================
-    # 🔎 SEARCH LOGIC (Atlas + Fallback)
+    # 🔎 UPDATED SEARCH LOGIC (Filters + Fallback)
     # ==================================================================
 
-    async def get_search_results(self, query, file_type=None):
+    async def get_search_results(self, query, lang=None, quality=None, offset=0, limit=10):
         """
-        query: str - The text to search
-        file_type: str - 'video', 'document', or None (for all)
+        Searches for files using Regex with optional Language & Quality filters.
         """
         if not query: return []
-        query = self.clean_text(query)
-
-        # 1. ATLAS SEARCH
-        search_stage = {
-            "$search": {
-                "index": "default",
-                "compound": {
-                    "should": [
-                        {
-                            "autocomplete": {
-                                "query": query,
-                                "path": "file_name",
-                                "fuzzy": {"maxEdits": 2},
-                                "score": {"boost": {"value": 3}}
-                            }
-                        },
-                        {
-                            "text": {
-                                "query": query,
-                                "path": "caption",
-                                "fuzzy": {"maxEdits": 1}
-                            }
-                        }
-                    ]
-                }
-            }
+        
+        # 1. Base Query (Match Text)
+        regex_query = re.escape(query)
+        words = query.split()
+        if len(words) > 1:
+            # Matches all words in any order
+            regex_query = "".join(f"(?=.*{re.escape(w)})" for w in words)
+        
+        mongo_query = {
+            "file_name": {"$regex": regex_query, "$options": "i"}
         }
-        
-        # Build Pipeline
-        pipeline = [search_stage]
-        
-        # 👇 Apply Filter if provided
-        if file_type:
-            pipeline.append({
-                "$match": {"file_type": file_type}
-            })
 
-        # Add limit and projection
-        pipeline.extend([
-            {"$limit": 50},
-            {"$project": {
-                "file_name": 1, 
-                "file_size": 1, 
-                "caption": 1, 
-                "file_id": 1, 
-                "link_id": 1, 
-                "file_type": 1,  # Added to projection
-                "score": {"$meta": "searchScore"}
-            }}
-        ])
+        # 2. Add Smart Language Filter
+        if lang and lang != "None":
+            key = lang.capitalize()
+            if key in LANG_PATTERNS:
+                pattern = LANG_PATTERNS[key]
+                # Filter: File Name OR Caption must contain the language pattern
+                mongo_query["$and"] = [
+                    {"$or": [
+                        {"file_name": {"$regex": pattern}},
+                        {"caption": {"$regex": pattern}}
+                    ]}
+                ]
 
-        try:
-            cursor = self.col.aggregate(pipeline)
-            results = await cursor.to_list(length=50)
-            if results: return results
-        except Exception as e:
-            logger.error(f"⚠️ Atlas Search Error: {e}")
+        # 3. Add Smart Quality Filter
+        if quality and quality != "None":
+            if quality in QUAL_PATTERNS:
+                pattern = QUAL_PATTERNS[quality]
+            else:
+                pattern = re.compile(rf'\b{quality}\b', re.IGNORECASE)
 
-        # 2. REGEX FALLBACK
-        return await self.get_search_results_fallback(query, file_type)
-
-    async def get_search_results_fallback(self, query, file_type=None):
-        split_words = query.split()
-        if not split_words: return []
-        valid_words = [re.escape(w) for w in split_words if len(w) > 2]
-        if not valid_words: return []
-        regex_pattern = "|".join(valid_words)
-        
-        regex_query = {
-            "$or": [
-                {"file_name": {"$regex": regex_pattern, "$options": "i"}},
-                {"caption": {"$regex": regex_pattern, "$options": "i"}}
-            ]
-        }
-        
-        # 👇 Apply Filter to Regex Query
-        if file_type:
-            regex_query["file_type"] = file_type
+            if "$and" not in mongo_query:
+                mongo_query["$and"] = []
             
-        return await self.col.find(regex_query).limit(50).to_list(length=50)
+            mongo_query["$and"].append(
+                {"file_name": {"$regex": pattern}}
+            )
+
+        # 4. Fetch Results
+        try:
+            cursor = self.col.find(mongo_query)
+            cursor.sort('_id', -1)  # Sort by newest
+            cursor.skip(offset).limit(limit)
+            
+            files = await cursor.to_list(length=limit)
+            return files
+            
+        except Exception as e:
+            logger.error(f"Search Error: {e}")
+            return []
 
     async def get_file_by_link_id(self, link_id):
         return await self.col.find_one({"link_id": link_id})
 
-    # 👇 UPDATED: Safe Delete (Preserves JSON Index)
     async def delete_all_files(self):
         """
         Deletes all documents in the collection but keeps the Index Config.
