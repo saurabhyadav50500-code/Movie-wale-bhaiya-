@@ -9,144 +9,10 @@ from pyrogram.errors import MessageNotModified
 from database.ia_filterdb import db
 from database.analytics import analytics
 from database.users_chats_db import db_users
-from utils import get_size
+from utils import get_size, btn_parser # Importing updated btn_parser from utils
 
 # --- CONFIGURATION ---
 BUTTONS_PER_PAGE = 10
-
-# ==========================================
-# 🛠️ HELPER: BUTTON PARSER (Smart UI)
-# ==========================================
-async def btn_parser(search_id, files, client, offset=0, active_lang=None, active_qual=None):
-    """
-    Generates buttons with Smart Language & Quality Filters.
-    Callback Format: next_{search_id}_{offset}_{lang}_{qual}
-    """
-    end_index = offset + BUTTONS_PER_PAGE
-    current_files = files[offset:end_index]
-    
-    buttons = []
-    
-    # 1. FILE BUTTONS
-    if client.me:
-        bot_username = client.me.username
-    else:
-        bot_username = "my_random_bot"
-
-    if not current_files and offset == 0:
-        # ⚠️ ZERO RESULTS HANDLING: Show dummy button so filters don't vanish
-        buttons.append([InlineKeyboardButton("🤷‍♂️ No results with these filters", callback_data="none")])
-    else:
-        for file in current_files:
-            f_id = file.get('link_id') 
-            f_name = file.get('file_name', 'Unknown File')
-            f_size = get_size(file.get('file_size', 0))
-            
-            if len(f_name) > 30:
-                f_name = f_name[:27] + "..."
-                
-            buttons.append(
-                [InlineKeyboardButton(
-                    text=f"📂 {f_name} | {f_size}",
-                    url=f"https://t.me/{bot_username}?start=file_{f_id}"
-                )]
-            )
-
-    # 2. FILTER ROW 1: LANGUAGES
-    # Logic: Toggle "✅" if selected. Keep Quality state unchanged.
-    lang_row = []
-    langs = ["Hindi", "English", "Tamil", "Telugu"] # You can add more
-    
-    for lang in langs:
-        lang_code = lang.lower()
-        
-        # If active, show Checkmark and allow unchecking (set to 'None')
-        if active_lang == lang_code:
-            text = f"✅ {lang}"
-            next_lang = "None"
-        else:
-            text = lang
-            next_lang = lang_code
-            
-        # Data: filter_{id}_{offset}_{lang}_{qual}
-        # We use offset=0 because changing filter resets page to 1
-        current_qual_safe = active_qual if active_qual else "None"
-        cb_data = f"filter_{search_id}_0_{next_lang}_{current_qual_safe}"
-        
-        lang_row.append(InlineKeyboardButton(text, callback_data=cb_data))
-    
-    buttons.append(lang_row)
-
-    # 3. FILTER ROW 2: QUALITIES
-    # Logic: Toggle "✅" if selected. Keep Language state unchanged.
-    qual_row = []
-    quals = ["480p", "720p", "1080p"]
-    
-    for qual in quals:
-        qual_code = qual.lower()
-        
-        if active_qual == qual_code:
-            text = f"✅ {qual}"
-            next_qual = "None"
-        else:
-            text = qual
-            next_qual = qual_code
-            
-        current_lang_safe = active_lang if active_lang else "None"
-        cb_data = f"filter_{search_id}_0_{current_lang_safe}_{next_qual}"
-        
-        qual_row.append(InlineKeyboardButton(text, callback_data=cb_data))
-
-    buttons.append(qual_row)
-
-    # 4. PAGINATION BUTTONS
-    # Format: next_{id}_{offset}_{lang}_{qual}
-    
-    total_files = len(files)
-    total_pages = math.ceil(total_files / BUTTONS_PER_PAGE)
-    current_page = math.ceil(offset / BUTTONS_PER_PAGE) + 1
-    
-    nav_buttons = []
-    
-    # Safe strings for callback
-    cb_lang = active_lang if active_lang else "None"
-    cb_qual = active_qual if active_qual else "None"
-
-    if offset >= BUTTONS_PER_PAGE:
-        nav_buttons.append(
-            InlineKeyboardButton(
-                text="⬅️ Back",
-                callback_data=f"next_{search_id}_{offset - BUTTONS_PER_PAGE}_{cb_lang}_{cb_qual}"
-            )
-        )
-
-    nav_buttons.append(
-        InlineKeyboardButton(
-            text=f"Page {current_page}/{total_pages}",
-            callback_data="pages" 
-        )
-    )
-
-    if end_index < total_files:
-        nav_buttons.append(
-            InlineKeyboardButton(
-                text="Next ➡️",
-                callback_data=f"next_{search_id}_{end_index}_{cb_lang}_{cb_qual}"
-            )
-        )
-
-    buttons.append(nav_buttons)
-
-    # Close Button
-    buttons.append([
-        InlineKeyboardButton(
-            text="♻️ Close / Wrong Result",
-            callback_data=f"recheck_menu"
-        )
-    ])
-
-    return InlineKeyboardMarkup(buttons)
-
 
 # ==========================================
 # 1. MAIN SEARCH HANDLER
@@ -171,8 +37,8 @@ async def auto_filter(client: Client, message: Message):
         return await message.reply("❌ Database Error. Please try again.")
 
     # 🚀 Step 3: Initial Search (No Filters)
-    # lang=None, quality=None
-    files = await db.get_search_results(query, lang=None, quality=None)
+    # lang=None, quality=None, year=None, size=None
+    files = await db.get_search_results(query, lang=None, quality=None, year=None, size_key=None)
 
     # Log Analytics
     asyncio.create_task(
@@ -183,7 +49,10 @@ async def auto_filter(client: Client, message: Message):
         return 
 
     # Generate Buttons (Initial state: No filters)
-    reply_markup = await btn_parser(search_id, files, client, offset=0, active_lang=None, active_qual=None)
+    reply_markup = await btn_parser(
+        search_id, files, client, offset=0, 
+        active_lang=None, active_qual=None, active_year=None, active_size=None
+    )
 
     await message.reply_text(
         text=f"🔎 **Found {len(files)} results for:** `{query}`\n👇 **Select Filters or Click to Download:**",
@@ -193,28 +62,32 @@ async def auto_filter(client: Client, message: Message):
 
 
 # ==========================================
-# 2. COMBINED FILTER & PAGINATION HANDLER
+# 2. MASTER FILTER & PAGINATION HANDLER
 # ==========================================
 @Client.on_callback_query(filters.regex(r"^(next|filter)_"))
 async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     """
     Handles Next Page AND Filter Clicks in one robust function.
-    Data Format: action_searchID_offset_lang_qual
-    Example: next_102_10_hindi_720p
+    Data Format: action_id_offset_lang_qual_year_size
+    Example: next_102_10_hindi_720p_2023_l
     """
     data = callback.data.split("_")
     
     try:
-        # action = data[0] (not needed explicitly)
+        # data[0] is action (next/filter) - ignored
         search_id = int(data[1])
         offset = int(data[2])
         
-        # Safe Extraction for Lang & Qual (Handle "None" strings)
-        active_lang = data[3]
-        if active_lang == "None": active_lang = None
+        # Helper to treat "None" string as None object
+        def clean(val): return None if val == "None" else val
         
-        active_qual = data[4]
-        if active_qual == "None": active_qual = None
+        # Safe Extraction for all 4 Filters
+        active_lang = clean(data[3])
+        active_qual = clean(data[4])
+        
+        # Check length for backward compatibility (in case old buttons exist)
+        active_year = clean(data[5]) if len(data) > 5 else None
+        active_size = clean(data[6]) if len(data) > 6 else None
         
     except (IndexError, ValueError):
         return await callback.answer("❌ Error parsing data.", show_alert=True)
@@ -224,18 +97,21 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     if not query:
         return await callback.answer("❌ Search Expired (48h). Please type query again.", show_alert=True)
 
-    # 2. Database Search with Filters 
+    # 2. Database Search with ALL Filters 
     # Even if offset is 0 (new filter clicked), we must query DB to get counts
     files = await db.get_search_results(
         query, 
         lang=active_lang, 
-        quality=active_qual
+        quality=active_qual,
+        year=active_year,
+        size_key=active_size,
+        offset=offset
     )
     
     # 3. Handle Empty Results (But keep buttons alive!)
     if not files:
         if offset > 0:
-            return await callback.answer("⚠️ End of results.", show_alert=True)
+            return await callback.answer("⚠️ End of pages.", show_alert=True)
         else:
             await callback.answer("⚠️ No files found for this filter combination!", show_alert=False)
             # We continue below to render the buttons (so user can uncheck)
@@ -246,17 +122,21 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
         files, 
         client, 
         offset, 
-        active_lang=active_lang, 
-        active_qual=active_qual
+        active_lang, active_qual, active_year, active_size
     )
 
-    # 5. Build Status Text
-    filter_status = ""
-    if active_lang: filter_status += f"🏳️ {active_lang.title()} "
-    if active_qual: filter_status += f"💿 {active_qual}"
+    # 5. Build Status Text (Show Active Filters)
+    status = ""
+    if active_lang: status += f"🏳️ {active_lang.title()} "
+    if active_qual: status += f"💿 {active_qual} "
+    if active_year: status += f"📅 {active_year} "
     
-    if filter_status:
-        text_content = f"🔎 **Results for:** `{query}`\n⚙️ **Active Filters:** {filter_status}"
+    # Map size key to label for display
+    sizes_map = {"s": "<500MB", "m": "500MB-1GB", "l": "1GB-2GB", "xl": ">2GB"}
+    if active_size: status += f"📦 {sizes_map.get(active_size, active_size)}"
+    
+    if status:
+        text_content = f"🔎 **Results for:** `{query}`\n⚙️ **Active Filters:** {status}"
     else:
         text_content = f"🔎 **Results for:** `{query}`"
 
