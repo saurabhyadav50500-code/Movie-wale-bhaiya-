@@ -8,9 +8,6 @@ from database.analytics import analytics
 from database.users_chats_db import db_users
 from utils import btn_parser
 
-# ==========================================
-# 1. MAIN TEXT HANDLER
-# ==========================================
 @Client.on_message(filters.text & filters.group)
 async def auto_filter(client: Client, message: Message):
     query = message.text
@@ -21,15 +18,13 @@ async def auto_filter(client: Client, message: Message):
     search_id = await db.save_search_query(query, message.from_user.id)
     asyncio.create_task(analytics.log_search(message.text, query, 0, message.from_user.id, message.chat.id))
 
-    if not search_id: return await message.reply("❌ Database Error.")
+    if not search_id: return await message.reply("❌ DB Error.")
 
-    # Search & Get Years
     files = await db.get_search_results(query)
-    years = await db.get_unique_years(query) # Fetch years here!
+    years = await db.get_unique_years(query) # Fetch years
 
     if not files: return 
 
-    # Pass 'years' to utils
     reply_markup = await btn_parser(search_id, files, client, 0, years=years)
 
     await message.reply_text(
@@ -38,17 +33,12 @@ async def auto_filter(client: Client, message: Message):
         quote=True
     )
 
-# ==========================================
-# 2. MASTER CALLBACK HANDLER
-# ==========================================
 @Client.on_callback_query(filters.regex(r"^(next|filter)_"))
 async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     data = callback.data.split("_")
-    
     try:
         search_id = int(data[1])
         offset = int(data[2])
-        
         def c(v): return None if v == "None" else v
         
         a_type = c(data[3]) if len(data) > 3 else None
@@ -65,16 +55,9 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
         return await callback.answer("❌ Search Expired.", show_alert=True)
 
     files = await db.get_search_results(
-        query, 
-        file_type=a_type,
-        lang=a_lang, 
-        quality=a_qual, 
-        year=a_year, 
-        size_key=a_size,
-        offset=offset
+        query, file_type=a_type, lang=a_lang, quality=a_qual, 
+        year=a_year, size_key=a_size, offset=offset
     )
-    
-    # Fetch Years for the buttons
     years = await db.get_unique_years(query)
 
     if not files:
@@ -85,8 +68,7 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
 
     new_markup = await btn_parser(
         search_id, files, client, offset, 
-        a_type, a_lang, a_qual, a_year, a_size,
-        years=years # Pass years here too
+        a_type, a_lang, a_qual, a_year, a_size, years=years
     )
     
     status = []
