@@ -1,27 +1,16 @@
-import secrets
-import string
 import re
 import math
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-
-# 👇 Database Import (Required for Smart Year Detection)
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database.ia_filterdb import db
 
-# ==========================================
-# 1. SMART DETECTION PATTERNS (Regex)
-# ==========================================
-
-# Matches: "Hindi", "Hin", "HIN", "dub", "Dual" (Case Insensitive)
+# --- REGEX PATTERNS ---
 LANG_PATTERNS = {
-    "Hindi": re.compile(r'\b(hindi|hin|dub|dual|org)\b', re.IGNORECASE),
+    "Hindi": re.compile(r'\b(hindi|hin|dub|dual)\b', re.IGNORECASE),
     "English": re.compile(r'\b(english|eng)\b', re.IGNORECASE),
     "Tamil": re.compile(r'\b(tamil|tam)\b', re.IGNORECASE),
     "Telugu": re.compile(r'\b(telugu|tel)\b', re.IGNORECASE),
-    "Malayalam": re.compile(r'\b(malayalam|mal)\b', re.IGNORECASE),
-    "Kannada": re.compile(r'\b(kannada|kan)\b', re.IGNORECASE),
 }
 
-# Matches: "720p", "720", "HD"
 QUAL_PATTERNS = {
     "480p": re.compile(r'\b(480p|480|sd)\b', re.IGNORECASE),
     "720p": re.compile(r'\b(720p|720|hd)\b', re.IGNORECASE),
@@ -29,15 +18,8 @@ QUAL_PATTERNS = {
     "4k": re.compile(r'\b(2160p|4k|uhd)\b', re.IGNORECASE),
 }
 
-# ==========================================
-# 2. GENERAL UTILITIES (Old Code Preserved)
-# ==========================================
-
 def get_size(size):
-    """
-    Converts bytes to a human-readable format (e.g., 1024 -> 1KB).
-    """
-    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    units = ["B", "KB", "MB", "GB", "TB"]
     size = float(size)
     i = 0
     while size >= 1024.0 and i < len(units) - 1:
@@ -45,188 +27,109 @@ def get_size(size):
         size /= 1024.0
     return "%.2f %s" % (size, units[i])
 
-def generate_link_id(length=8):
-    """Generates a unique alphanumeric ID."""
-    alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
-
-def get_file_details(message: Message):
-    """
-    Extracts file_id, file_ref, name, size, and type from a Message.
-    """
-    media = None
-    file_type = None
-    file_name = None
-    mime_type = None
-
-    if message.document:
-        media = message.document
-        file_type = "document"
-        file_name = message.document.file_name
-        mime_type = message.document.mime_type
-    elif message.video:
-        media = message.video
-        file_type = "video"
-        file_name = message.video.file_name or "Unknown Video"
-        mime_type = message.video.mime_type
-    elif message.audio:
-        media = message.audio
-        file_type = "audio"
-        file_name = message.audio.file_name or "Unknown Audio"
-        mime_type = message.audio.mime_type
-    
-    if not media:
-        return None
-
-    return {
-        'file_id': media.file_id,
-        'file_unique_id': media.file_unique_id,
-        'file_ref': getattr(media, "file_ref", ""),
-        'file_name': file_name,
-        'file_size': media.file_size,
-        'file_type': file_type,
-        'mime_type': mime_type
-    }
-
 # ==========================================
-# 3. SMART BUTTON PARSER (Updated for 4 Layers)
+# 🛠️ BUTTON PARSER (Custom Layout)
 # ==========================================
-
-async def btn_parser(search_id, files, client, offset=0, active_lang=None, active_qual=None, active_year=None, active_size=None):
+async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None, a_qual=None, a_year=None, a_size=None):
     """
-    Generates buttons with 4 Layers of Filters: Lang, Qual, Year, Size.
-    
-    Callback Data Format: 
-    action_searchID_offset_lang_qual_year_size
+    Layout:
+    1. Files
+    2. Video | Docs (Type)
+    3. Langs | Quality
+    4. Years | Sizes
+    5. Pagination
     """
     buttons = []
     
-    # Username safe fetch
-    if client.me:
-        bot_username = client.me.username
-    else:
-        bot_username = "my_random_bot"
-
-    # --- A. FILE LIST ---
+    # 1. FILE RESULTS
+    bot_username = client.me.username if client.me else "Bot"
     if not files:
-        # ⚠️ HANDLE ZERO RESULTS
-        buttons.append([InlineKeyboardButton("🤷‍♂️ No files found (Try changing filters)", callback_data="none")])
+         buttons.append([InlineKeyboardButton("🤷‍♂️ No results with these filters", callback_data="none")])
     else:
         for file in files:
-            f_id = file.get('link_id')
-            f_name = file.get('file_name', 'Unknown File')
-            f_size = get_size(file.get('file_size', 0))
-            
-            if len(f_name) > 30:
-                f_name = f_name[:27] + "..."
-                
-            buttons.append([InlineKeyboardButton(
-                text=f"📂 {f_name} | {f_size}",
-                url=f"https://t.me/{bot_username}?start=file_{f_id}"
-            )])
+            f_name = file['file_name']
+            f_size = get_size(file['file_size'])
+            f_link = f"https://t.me/{bot_username}?start=file_{file['link_id']}"
+            if len(f_name) > 30: f_name = f_name[:27] + "..."
+            buttons.append([InlineKeyboardButton(f"📂 {f_name} | {f_size}", url=f_link)])
 
-    # Helper for Safe Callback Strings (Avoid 'None' object error)
-    c_lang = active_lang if active_lang else "None"
-    c_qual = active_qual if active_qual else "None"
-    c_year = active_year if active_year else "None"
-    c_size = active_size if active_size else "None"
-
-    # --- B. LANGUAGE ROW ---
-    lang_row = []
-    langs = ["Hindi", "English", "Tamil"] 
+    # Helper for Safe Strings ("None" handling)
+    def s(val): return val if val else "None"
     
-    for lang in langs:
+    # Base Callback: filter_id_off_type_lang_qual_year_size
+    # Note: We reset offset to 0 whenever a filter is clicked
+    base = f"filter_{search_id}_0"
+
+    # 2. TYPE BUTTONS (Videos | Docs)
+    type_row = []
+    for t in ["video", "document"]:
+        label = "📹 Videos" if t == "video" else "📂 Docs"
+        if a_type == t:
+            label = f"✅ {label.split()[1]}" # Show Check
+            new_val = "None"
+        else:
+            new_val = t
+        type_row.append(InlineKeyboardButton(label, callback_data=f"{base}_{new_val}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}"))
+    
+    # Reset Button if any filter active
+    if any([a_type, a_lang, a_qual, a_year, a_size]):
+         type_row.append(InlineKeyboardButton("🔄 Reset", callback_data=f"{base}_None_None_None_None_None"))
+    buttons.append(type_row)
+
+    # 3. LANGUAGE & QUALITY (Combined Row)
+    lq_row = []
+    # Add top languages
+    for lang in ["Hindi", "English"]:
         l_code = lang.lower()
-        is_active = (active_lang == l_code)
-        
-        text = f"✅ {lang}" if is_active else lang
-        next_val = "None" if is_active else l_code # Toggle Logic
-        
-        # Reset offset to 0 when filter changes
-        cb_data = f"filter_{search_id}_0_{next_val}_{c_qual}_{c_year}_{c_size}"
-        lang_row.append(InlineKeyboardButton(text, callback_data=cb_data))
+        txt = f"✅ {lang}" if a_lang == l_code else lang
+        n_l = "None" if a_lang == l_code else l_code
+        lq_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{n_l}_{s(a_qual)}_{s(a_year)}_{s(a_size)}"))
     
-    buttons.append(lang_row)
-
-    # --- C. QUALITY ROW ---
-    qual_row = []
-    quals = ["480p", "720p", "1080p"]
-    
-    for qual in quals:
+    # Add top qualities
+    for qual in ["720p", "1080p"]:
         q_code = qual.lower()
-        is_active = (active_qual == q_code)
-        
-        text = f"✅ {qual}" if is_active else qual
-        next_val = "None" if is_active else q_code
-        
-        cb_data = f"filter_{search_id}_0_{c_lang}_{next_val}_{c_year}_{c_size}"
-        qual_row.append(InlineKeyboardButton(text, callback_data=cb_data))
+        txt = f"✅ {qual}" if a_qual == q_code else qual
+        n_q = "None" if a_qual == q_code else q_code
+        lq_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{n_q}_{s(a_year)}_{s(a_size)}"))
+    
+    buttons.append(lq_row)
 
-    buttons.append(qual_row)
-
-    # --- D. YEAR ROW (Smart Detection) ---
-    # Fetch available years from DB for this query
+    # 4. YEAR & SIZE (Combined Row)
+    ys_row = []
+    
+    # Smart Years (Fetch only if query exists)
     query = await db.get_search_query(search_id)
-    available_years = await db.get_unique_years(query) if query else []
+    years = await db.get_unique_years(query) if query else []
     
-    year_row = []
-    # Show max 4 relevant years to save space
-    for year in available_years[:4]: 
-        is_active = (active_year == year)
-        
-        text = f"✅ {year}" if is_active else year
-        next_val = "None" if is_active else year
-        
-        cb_data = f"filter_{search_id}_0_{c_lang}_{c_qual}_{next_val}_{c_size}"
-        year_row.append(InlineKeyboardButton(text, callback_data=cb_data))
-    
-    if year_row:
-        buttons.append(year_row)
+    for year in years[:2]: # Show max 2 relevant years to save space
+        txt = f"✅ {year}" if a_year == year else year
+        n_y = "None" if a_year == year else year
+        ys_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{n_y}_{s(a_size)}"))
 
-    # --- E. SIZE ROW ---
-    # Keys: s (<500), m (500-1G), l (1G-2G), xl (>2G)
-    size_row = []
-    sizes = [("s", "<500MB"), ("m", "1GB"), ("l", "2GB"), ("xl", ">2GB")]
-    
-    for key, label in sizes:
-        is_active = (active_size == key)
-        
-        text = f"✅ {label}" if is_active else label
-        next_val = "None" if is_active else key
-        
-        cb_data = f"filter_{search_id}_0_{c_lang}_{c_qual}_{c_year}_{next_val}"
-        size_row.append(InlineKeyboardButton(text, callback_data=cb_data))
-    
-    buttons.append(size_row)
+    # Sizes
+    sizes = [("s", "<500MB"), ("l", "1GB+")]
+    for k, v in sizes:
+        txt = f"✅ {v}" if a_size == k else v
+        n_s = "None" if a_size == k else k
+        ys_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{n_s}"))
 
-    # --- F. PAGINATION ---
-    nav_buttons = []
+    buttons.append(ys_row)
+
+    # 5. PAGINATION
+    nav = []
+    cb_state = f"{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}"
     
-    # Back Button
     if offset >= 10:
-        nav_buttons.append(
-            InlineKeyboardButton(
-                "⬅️ Back", 
-                callback_data=f"next_{search_id}_{offset - 10}_{c_lang}_{c_qual}_{c_year}_{c_size}"
-            )
-        )
-
-    # Page Number
-    current_page = math.ceil(offset / 10) + 1
-    nav_buttons.append(InlineKeyboardButton(f"Page {current_page}", callback_data="pages"))
-
-    # Next Button (Only if we have full page)
+        nav.append(InlineKeyboardButton("⬅️ Back", callback_data=f"next_{search_id}_{offset-10}_{cb_state}"))
+    
+    nav.append(InlineKeyboardButton(f"Page {math.ceil(offset/10)+1}", callback_data="pages"))
+    
     if len(files) >= 10:
-        nav_buttons.append(
-            InlineKeyboardButton(
-                "Next ➡️", 
-                callback_data=f"next_{search_id}_{offset + 10}_{c_lang}_{c_qual}_{c_year}_{c_size}"
-            )
-        )
-
-    buttons.append(nav_buttons)
-
-    # Close Button
-    buttons.append([InlineKeyboardButton("♻️ Close / Wrong Result", callback_data="recheck_menu")])
+        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"next_{search_id}_{offset+10}_{cb_state}"))
+    
+    buttons.append(nav)
+    
+    # Close
+    buttons.append([InlineKeyboardButton("♻️ Close", callback_data="recheck_menu")])
 
     return InlineKeyboardMarkup(buttons)
