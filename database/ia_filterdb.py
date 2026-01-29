@@ -1,6 +1,6 @@
-import re
 import logging
-import motor.motor_asyncio
+import re
+from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime
 from info import MONGO_URI, DATABASE_NAME, COLLECTION_NAME
 from utils import get_file_details, generate_link_id, LANG_PATTERNS, QUAL_PATTERNS
@@ -207,12 +207,13 @@ class Media:
         return result == 1
 
     # ==================================================================
-    # 🔎 UPDATED SEARCH LOGIC (Filters + Fallback)
+    # 🔎 UPDATED SEARCH LOGIC (With Year & Size Filters)
     # ==================================================================
 
-    async def get_search_results(self, query, lang=None, quality=None, offset=0, limit=10):
+    async def get_search_results(self, query, lang=None, quality=None, year=None, size_key=None, offset=0, limit=10):
         """
-        Searches for files using Regex with optional Language & Quality filters.
+        Searches with Regex. 
+        Filters: Language, Quality, Year (Regex), Size (Bytes).
         """
         if not query: return []
         
@@ -220,7 +221,6 @@ class Media:
         regex_query = re.escape(query)
         words = query.split()
         if len(words) > 1:
-            # Matches all words in any order
             regex_query = "".join(f"(?=.*{re.escape(w)})" for w in words)
         
         mongo_query = {
@@ -233,11 +233,8 @@ class Media:
             if key in LANG_PATTERNS:
                 pattern = LANG_PATTERNS[key]
                 # Filter: File Name OR Caption must contain the language pattern
-                mongo_query["$and"] = [
-                    {"$or": [
-                        {"file_name": {"$regex": pattern}},
-                        {"caption": {"$regex": pattern}}
-                    ]}
+                mongo_query["$and"] = mongo_query.get("$and", []) + [
+                    {"$or": [{"file_name": {"$regex": pattern}}, {"caption": {"$regex": pattern}}]}
                 ]
 
         # 3. Add Smart Quality Filter
@@ -247,14 +244,31 @@ class Media:
             else:
                 pattern = re.compile(rf'\b{quality}\b', re.IGNORECASE)
 
-            if "$and" not in mongo_query:
-                mongo_query["$and"] = []
-            
-            mongo_query["$and"].append(
-                {"file_name": {"$regex": pattern}}
-            )
+            mongo_query["$and"] = mongo_query.get("$and", []) + [{"file_name": {"$regex": pattern}}]
 
-        # 4. Fetch Results
+        # 4. Add Year Filter (Smart Regex)
+        if year and year != "None":
+            # Matches "2024" but not "2024mb"
+            year_pattern = re.compile(rf'\b{year}\b')
+            mongo_query["$and"] = mongo_query.get("$and", []) + [{"file_name": {"$regex": year_pattern}}]
+
+        # 5. Add Size Filter (Bytes Calculation)
+        if size_key and size_key != "None":
+            # Bytes: 1MB = 1048576, 1GB = 1073741824
+            size_query = {}
+            if size_key == "s":   # < 500MB
+                size_query = {"$lt": 524288000}
+            elif size_key == "m": # 500MB - 1GB
+                size_query = {"$gte": 524288000, "$lt": 1073741824}
+            elif size_key == "l": # 1GB - 2GB
+                size_query = {"$gte": 1073741824, "$lt": 2147483648}
+            elif size_key == "xl": # > 2GB
+                size_query = {"$gte": 2147483648}
+            
+            if size_query:
+                mongo_query["file_size"] = size_query
+
+        # 6. Fetch Results
         try:
             cursor = self.col.find(mongo_query)
             cursor.sort('_id', -1)  # Sort by newest
@@ -265,6 +279,41 @@ class Media:
             
         except Exception as e:
             logger.error(f"Search Error: {e}")
+            return []
+
+    # ==========================================
+    # 📅 SMART YEAR DETECTION
+    # ==========================================
+    async def get_unique_years(self, query):
+        """
+        Scans top results to find which Years actually exist (Smart Buttons).
+        Returns a sorted list of years (e.g., ['2024', '2023', '2019'])
+        """
+        regex_query = re.escape(query)
+        pipeline = [
+            {"$match": {"file_name": {"$regex": regex_query, "$options": "i"}}},
+            {"$limit": 100}, # Limit scan to top 100 relevant files for speed
+            {"$project": {"file_name": 1}},
+        ]
+        
+        try:
+            cursor = self.col.aggregate(pipeline)
+            files = await cursor.to_list(length=100)
+            
+            years = set()
+            # Regex to find years 19xx or 20xx
+            year_pattern = re.compile(r'\b(19|20)\d{2}\b')
+            
+            for file in files:
+                full_matches = year_pattern.findall(file['file_name'])
+                if full_matches:
+                    years.update(full_matches)
+            
+            # Return sorted descending (2024, 2023...)
+            return sorted(list(years), reverse=True)
+            
+        except Exception as e:
+            logger.error(f"Year Aggregation Error: {e}")
             return []
 
     async def get_file_by_link_id(self, link_id):
