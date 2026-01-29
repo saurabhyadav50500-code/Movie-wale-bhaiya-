@@ -1,5 +1,6 @@
 import math
 import asyncio
+import re
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 from pyrogram.errors import MessageNotModified
@@ -13,75 +14,109 @@ from utils import get_size
 # --- CONFIGURATION ---
 BUTTONS_PER_PAGE = 10
 
-async def btn_parser(search_id, files, client, offset=0, active_filter=None):
+# ==========================================
+# 🛠️ HELPER: BUTTON PARSER (Smart UI)
+# ==========================================
+async def btn_parser(search_id, files, client, offset=0, active_lang=None, active_qual=None):
     """
-    Generates buttons with File Type Filters.
-    active_filter: 'video', 'document', or None
+    Generates buttons with Smart Language & Quality Filters.
+    Callback Format: next_{search_id}_{offset}_{lang}_{qual}
     """
     end_index = offset + BUTTONS_PER_PAGE
     current_files = files[offset:end_index]
     
     buttons = []
     
-    # Username safe fetch
+    # 1. FILE BUTTONS
     if client.me:
         bot_username = client.me.username
     else:
-        bot_username = "my_random_bot" # Fallback
+        bot_username = "my_random_bot"
 
-    # --- 1. FILE BUTTONS ---
-    for file in current_files:
-        f_id = file.get('link_id') 
-        f_name = file.get('file_name', 'Unknown File')
-        f_size = get_size(file.get('file_size', 0))
-        
-        if len(f_name) > 30:
-            f_name = f_name[:27] + "..."
+    if not current_files and offset == 0:
+        # ⚠️ ZERO RESULTS HANDLING: Show dummy button so filters don't vanish
+        buttons.append([InlineKeyboardButton("🤷‍♂️ No results with these filters", callback_data="none")])
+    else:
+        for file in current_files:
+            f_id = file.get('link_id') 
+            f_name = file.get('file_name', 'Unknown File')
+            f_size = get_size(file.get('file_size', 0))
             
-        # URL Button for PM Redirect
-        buttons.append(
-            [InlineKeyboardButton(
-                text=f"📂 {f_name} | {f_size}",
-                url=f"https://t.me/{bot_username}?start=file_{f_id}"
-            )]
-        )
+            if len(f_name) > 30:
+                f_name = f_name[:27] + "..."
+                
+            buttons.append(
+                [InlineKeyboardButton(
+                    text=f"📂 {f_name} | {f_size}",
+                    url=f"https://t.me/{bot_username}?start=file_{f_id}"
+                )]
+            )
 
-    # --- 2. FILTER BUTTONS ROW ---
-    # Logic: Data format is filter_{search_id}_{type}
+    # 2. FILTER ROW 1: LANGUAGES
+    # Logic: Toggle "✅" if selected. Keep Quality state unchanged.
+    lang_row = []
+    langs = ["Hindi", "English", "Tamil", "Telugu"] # You can add more
     
-    filter_row = []
+    for lang in langs:
+        lang_code = lang.lower()
+        
+        # If active, show Checkmark and allow unchecking (set to 'None')
+        if active_lang == lang_code:
+            text = f"✅ {lang}"
+            next_lang = "None"
+        else:
+            text = lang
+            next_lang = lang_code
+            
+        # Data: filter_{id}_{offset}_{lang}_{qual}
+        # We use offset=0 because changing filter resets page to 1
+        current_qual_safe = active_qual if active_qual else "None"
+        cb_data = f"filter_{search_id}_0_{next_lang}_{current_qual_safe}"
+        
+        lang_row.append(InlineKeyboardButton(text, callback_data=cb_data))
     
-    # Video Button
-    vid_text = "📹 Videos ✅" if active_filter == "video" else "📹 Videos"
-    filter_row.append(InlineKeyboardButton(vid_text, callback_data=f"filter_{search_id}_video"))
+    buttons.append(lang_row)
 
-    # Docs Button
-    doc_text = "📂 Docs ✅" if active_filter == "document" else "📂 Docs"
-    filter_row.append(InlineKeyboardButton(doc_text, callback_data=f"filter_{search_id}_document"))
+    # 3. FILTER ROW 2: QUALITIES
+    # Logic: Toggle "✅" if selected. Keep Language state unchanged.
+    qual_row = []
+    quals = ["480p", "720p", "1080p"]
+    
+    for qual in quals:
+        qual_code = qual.lower()
+        
+        if active_qual == qual_code:
+            text = f"✅ {qual}"
+            next_qual = "None"
+        else:
+            text = qual
+            next_qual = qual_code
+            
+        current_lang_safe = active_lang if active_lang else "None"
+        cb_data = f"filter_{search_id}_0_{current_lang_safe}_{next_qual}"
+        
+        qual_row.append(InlineKeyboardButton(text, callback_data=cb_data))
 
-    # All/Reset Button (Only show if a filter is active to save space, or always show)
-    if active_filter is not None:
-        filter_row.append(InlineKeyboardButton("🔄 All Files", callback_data=f"filter_{search_id}_all"))
+    buttons.append(qual_row)
 
-    buttons.append(filter_row)
-
-    # --- 3. PAGINATION BUTTONS ---
-    # Logic: Data format is next_{search_id}_{offset}_{active_filter}
+    # 4. PAGINATION BUTTONS
+    # Format: next_{id}_{offset}_{lang}_{qual}
     
     total_files = len(files)
     total_pages = math.ceil(total_files / BUTTONS_PER_PAGE)
     current_page = math.ceil(offset / BUTTONS_PER_PAGE) + 1
     
     nav_buttons = []
-
-    # Helper: Convert None to string 'none' for callback data
-    filter_str = active_filter if active_filter else "none"
+    
+    # Safe strings for callback
+    cb_lang = active_lang if active_lang else "None"
+    cb_qual = active_qual if active_qual else "None"
 
     if offset >= BUTTONS_PER_PAGE:
         nav_buttons.append(
             InlineKeyboardButton(
                 text="⬅️ Back",
-                callback_data=f"next_{search_id}_{offset - BUTTONS_PER_PAGE}_{filter_str}"
+                callback_data=f"next_{search_id}_{offset - BUTTONS_PER_PAGE}_{cb_lang}_{cb_qual}"
             )
         )
 
@@ -96,12 +131,13 @@ async def btn_parser(search_id, files, client, offset=0, active_filter=None):
         nav_buttons.append(
             InlineKeyboardButton(
                 text="Next ➡️",
-                callback_data=f"next_{search_id}_{end_index}_{filter_str}"
+                callback_data=f"next_{search_id}_{end_index}_{cb_lang}_{cb_qual}"
             )
         )
 
     buttons.append(nav_buttons)
 
+    # Close Button
     buttons.append([
         InlineKeyboardButton(
             text="♻️ Close / Wrong Result",
@@ -113,7 +149,7 @@ async def btn_parser(search_id, files, client, offset=0, active_filter=None):
 
 
 # ==========================================
-# 1. MAIN SEARCH HANDLER (Optimized)
+# 1. MAIN SEARCH HANDLER
 # ==========================================
 @Client.on_message(filters.text & filters.group)
 async def auto_filter(client: Client, message: Message):
@@ -125,140 +161,139 @@ async def auto_filter(client: Client, message: Message):
     if not client.me:
         await client.get_me()
 
-    # 🚀 STEP 1: CHECK GROUP SETTINGS
+    # 🚀 Step 1: Check Group Settings (Cache)
     settings = await db_users.get_group_status(message.chat.id)
 
-    # 🚀 STEP 2: PARALLEL EXECUTION
-    # Default search: No filter (file_type=None)
-    search_task = asyncio.create_task(db.get_search_results(query, file_type=None))
-    save_task = asyncio.create_task(db.save_search_query(query, message.from_user.id))
+    # 🚀 Step 2: Save Query First (Essential for ID)
+    search_id = await db.save_search_query(query, message.from_user.id)
+    
+    if not search_id:
+        return await message.reply("❌ Database Error. Please try again.")
+
+    # 🚀 Step 3: Initial Search (No Filters)
+    # lang=None, quality=None
+    files = await db.get_search_results(query, lang=None, quality=None)
 
     # Log Analytics
     asyncio.create_task(
-        analytics.log_search(message.text, query, 0, message.from_user.id, message.chat.id)
+        analytics.log_search(message.text, query, len(files), message.from_user.id, message.chat.id)
     )
-
-    files, search_id = await asyncio.gather(search_task, save_task)
 
     if not files:
         return 
 
-    if not search_id:
-        return await message.reply("❌ Database Error. Please try again.")
-
-    # Generate Buttons (active_filter defaults to None)
-    reply_markup = await btn_parser(search_id, files, client, offset=0, active_filter=None)
+    # Generate Buttons (Initial state: No filters)
+    reply_markup = await btn_parser(search_id, files, client, offset=0, active_lang=None, active_qual=None)
 
     await message.reply_text(
-        text=f"🔎 **Found {len(files)} results for:** `{query}`\n\n👇 **Click below to get file in PM:**",
+        text=f"🔎 **Found {len(files)} results for:** `{query}`\n👇 **Select Filters or Click to Download:**",
         reply_markup=reply_markup,
         quote=True
     )
 
 
 # ==========================================
-# 2. FILTER HANDLER (NEW: Handles Video/Docs Clicks)
+# 2. COMBINED FILTER & PAGINATION HANDLER
 # ==========================================
-@Client.on_callback_query(filters.regex(r"^filter_"))
-async def filter_handler(client: Client, callback: CallbackQuery):
-    data = callback.data
-    # Format: filter_{search_id}_{type}
+@Client.on_callback_query(filters.regex(r"^(next|filter)_"))
+async def filter_pagination_handler(client: Client, callback: CallbackQuery):
+    """
+    Handles Next Page AND Filter Clicks in one robust function.
+    Data Format: action_searchID_offset_lang_qual
+    Example: next_102_10_hindi_720p
+    """
+    data = callback.data.split("_")
+    
     try:
-        _, str_id, filter_type = data.split("_")
-        search_id = int(str_id)
-    except (ValueError, IndexError):
-        return await callback.answer("❌ Error parsing data.")
+        # action = data[0] (not needed explicitly)
+        search_id = int(data[1])
+        offset = int(data[2])
+        
+        # Safe Extraction for Lang & Qual (Handle "None" strings)
+        active_lang = data[3]
+        if active_lang == "None": active_lang = None
+        
+        active_qual = data[4]
+        if active_qual == "None": active_qual = None
+        
+    except (IndexError, ValueError):
+        return await callback.answer("❌ Error parsing data.", show_alert=True)
 
-    # Determine Database Filter
-    if filter_type == "all":
-        db_filter = None
-    else:
-        db_filter = filter_type # 'video' or 'document'
-
-    # Get Original Query
+    # 1. Retrieve Original Query
     query = await db.get_search_query(search_id)
     if not query:
-        return await callback.answer("❌ Search Expired.", show_alert=True)
+        return await callback.answer("❌ Search Expired (48h). Please type query again.", show_alert=True)
 
-    # Search with New Filter 
-    files = await db.get_search_results(query, file_type=db_filter)
+    # 2. Database Search with Filters 
+    # Even if offset is 0 (new filter clicked), we must query DB to get counts
+    files = await db.get_search_results(
+        query, 
+        lang=active_lang, 
+        quality=active_qual
+    )
     
+    # 3. Handle Empty Results (But keep buttons alive!)
     if not files:
-        return await callback.answer(f"❌ No {filter_type}s found!", show_alert=True)
+        if offset > 0:
+            return await callback.answer("⚠️ End of results.", show_alert=True)
+        else:
+            await callback.answer("⚠️ No files found for this filter combination!", show_alert=False)
+            # We continue below to render the buttons (so user can uncheck)
 
-    # Generate New Buttons (Reset offset to 0)
-    new_markup = await btn_parser(search_id, files, client, offset=0, active_filter=db_filter)
+    # 4. Generate Updated Buttons
+    new_markup = await btn_parser(
+        search_id, 
+        files, 
+        client, 
+        offset, 
+        active_lang=active_lang, 
+        active_qual=active_qual
+    )
+
+    # 5. Build Status Text
+    filter_status = ""
+    if active_lang: filter_status += f"🏳️ {active_lang.title()} "
+    if active_qual: filter_status += f"💿 {active_qual}"
+    
+    if filter_status:
+        text_content = f"🔎 **Results for:** `{query}`\n⚙️ **Active Filters:** {filter_status}"
+    else:
+        text_content = f"🔎 **Results for:** `{query}`"
 
     try:
         await callback.edit_message_text(
-            text=f"🔎 **Found {len(files)} results for:** `{query}`\n🔽 **Filter:** {filter_type.title()}",
+            text=text_content,
             reply_markup=new_markup
         )
     except MessageNotModified:
         pass
-
-
-# ==========================================
-# 3. PAGINATION HANDLER (Updated for Filters)
-# ==========================================
-@Client.on_callback_query(filters.regex(r"^next_"))
-async def next_page_handler(client: Client, callback: CallbackQuery):
-    data = callback.data
-    
-    try:
-        # Data format: next_{search_id}_{offset}_{filter_type}
-        parts = data.split("_")
-        str_id = parts[1]
-        offset = int(parts[2])
-        
-        # Check for filter part (Backward compatibility)
-        if len(parts) > 3:
-            filter_str = parts[3]
-            active_filter = None if filter_str == "none" else filter_str
-        else:
-            active_filter = None
-
-    except (ValueError, IndexError):
-        return await callback.answer("❌ Error parsing data.", show_alert=True)
-
-    if not str_id.isdigit():
-         return await callback.answer("❌ Invalid Search ID.", show_alert=True)
-         
-    search_id = int(str_id)
-
-    # 1. Fetch Query
-    query = await db.get_search_query(search_id)
-    if not query:
-        return await callback.answer("❌ Search Expired.", show_alert=True)
-
-    # 2. Search (Pass the active filter)
-    files = await db.get_search_results(query, file_type=active_filter)
-    
-    if not files:
-        return await callback.answer("❌ No files found.", show_alert=True)
-
-    if not client.me:
-        await client.get_me()
-
-    # 3. Generate New Buttons (Pass the active filter)
-    new_markup = await btn_parser(search_id, files, client, offset=offset, active_filter=active_filter)
-
-    try:
-        await callback.edit_message_reply_markup(reply_markup=new_markup)
-    except MessageNotModified:
-        pass 
     except Exception as e:
-        print(f"Pagination Error: {e}")
+        print(f"Update Error: {e}")
 
 
 # ==========================================
-# 4. FILE DELIVERY & CLOSE HANDLERS (Unchanged)
+# 3. PAGE COUNTER HANDLER
+# ==========================================
+@Client.on_callback_query(filters.regex("pages"))
+async def pages_handler(_, callback):
+    await callback.answer("ℹ️ This is the current page number.", show_alert=True)
+
+
+# ==========================================
+# 4. FILE DELIVERY HANDLER (Priority High)
 # ==========================================
 @Client.on_message(filters.command("start") & filters.private, group=-1)
 async def file_delivery_handler(client: Client, message: Message):
-    if len(message.command) < 2: return
+    """
+    Handles deep link delivery. High priority.
+    """
+    if len(message.command) < 2:
+        return
+    
     payload = message.command[1]
-    if not payload.startswith("file_"): return
+    
+    if not payload.startswith("file_"):
+        return
 
     try:
         link_id = payload.split("file_", 1)[1]
@@ -266,9 +301,13 @@ async def file_delivery_handler(client: Client, message: Message):
         return await message.reply("❌ Invalid Link Format")
 
     file_info = await db.get_file_by_link_id(link_id)
-    if not file_info: return await message.reply("❌ File not found.")
+    
+    if not file_info:
+        return await message.reply("❌ File not found (Deleted or Invalid).")
 
+    # Add User to DB
     await db_users.add_user(message.from_user.id, message.from_user.first_name)
+
     status_msg = await message.reply("📂 **Found File! Sending now...**")
 
     try:
@@ -278,14 +317,20 @@ async def file_delivery_handler(client: Client, message: Message):
             caption=file_info['caption'] or "",
         )
         await status_msg.delete()
+    
     except Exception as e:
         print(f"Error Sending File: {e}")
+        # If deleted from Telegram, remove from DB
         if "MEDIA_EMPTY" in str(e) or "400" in str(e):
              await db.col.delete_one({"link_id": link_id})
-             await status_msg.edit("❌ **File Expired:** Deleted from Telegram.")
+             await status_msg.edit("❌ **File Expired:** This file was deleted from Telegram servers.")
         else:
-             await status_msg.edit(f"❌ Error: {str(e)}")
+             await status_msg.edit(f"❌ Error sending file: {str(e)}")
 
+
+# ==========================================
+# 5. CLOSE HANDLER
+# ==========================================
 @Client.on_callback_query(filters.regex(r"^recheck_menu"))
 async def close_handler(client: Client, callback: CallbackQuery):
     await callback.message.delete()
