@@ -210,39 +210,62 @@ class Media:
     # 🔎 SEARCH LOGIC (Atlas + Fallback)
     # ==================================================================
 
-    async def get_search_results(self, query):
+    async def get_search_results(self, query, file_type=None):
+        """
+        query: str - The text to search
+        file_type: str - 'video', 'document', or None (for all)
+        """
         if not query: return []
         query = self.clean_text(query)
 
         # 1. ATLAS SEARCH
-        pipeline = [
-            {
-                "$search": {
-                    "index": "default",
-                    "compound": {
-                        "should": [
-                            {
-                                "autocomplete": {
-                                    "query": query,
-                                    "path": "file_name",
-                                    "fuzzy": {"maxEdits": 2},
-                                    "score": {"boost": {"value": 3}}
-                                }
-                            },
-                            {
-                                "text": {
-                                    "query": query,
-                                    "path": "caption",
-                                    "fuzzy": {"maxEdits": 1}
-                                }
+        search_stage = {
+            "$search": {
+                "index": "default",
+                "compound": {
+                    "should": [
+                        {
+                            "autocomplete": {
+                                "query": query,
+                                "path": "file_name",
+                                "fuzzy": {"maxEdits": 2},
+                                "score": {"boost": {"value": 3}}
                             }
-                        ]
-                    }
+                        },
+                        {
+                            "text": {
+                                "query": query,
+                                "path": "caption",
+                                "fuzzy": {"maxEdits": 1}
+                            }
+                        }
+                    ]
                 }
-            },
+            }
+        }
+        
+        # Build Pipeline
+        pipeline = [search_stage]
+        
+        # 👇 Apply Filter if provided
+        if file_type:
+            pipeline.append({
+                "$match": {"file_type": file_type}
+            })
+
+        # Add limit and projection
+        pipeline.extend([
             {"$limit": 50},
-            {"$project": {"file_name": 1, "file_size": 1, "caption": 1, "file_id": 1, "link_id": 1, "score": {"$meta": "searchScore"}}}
-        ]
+            {"$project": {
+                "file_name": 1, 
+                "file_size": 1, 
+                "caption": 1, 
+                "file_id": 1, 
+                "link_id": 1, 
+                "file_type": 1,  # Added to projection
+                "score": {"$meta": "searchScore"}
+            }}
+        ])
 
         try:
             cursor = self.col.aggregate(pipeline)
@@ -252,20 +275,26 @@ class Media:
             logger.error(f"⚠️ Atlas Search Error: {e}")
 
         # 2. REGEX FALLBACK
-        return await self.get_search_results_fallback(query)
+        return await self.get_search_results_fallback(query, file_type)
 
-    async def get_search_results_fallback(self, query):
+    async def get_search_results_fallback(self, query, file_type=None):
         split_words = query.split()
         if not split_words: return []
         valid_words = [re.escape(w) for w in split_words if len(w) > 2]
         if not valid_words: return []
         regex_pattern = "|".join(valid_words)
+        
         regex_query = {
             "$or": [
                 {"file_name": {"$regex": regex_pattern, "$options": "i"}},
                 {"caption": {"$regex": regex_pattern, "$options": "i"}}
             ]
         }
+        
+        # 👇 Apply Filter to Regex Query
+        if file_type:
+            regex_query["file_type"] = file_type
+            
         return await self.col.find(regex_query).limit(50).to_list(length=50)
 
     async def get_file_by_link_id(self, link_id):
