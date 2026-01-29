@@ -17,20 +17,20 @@ async def auto_filter(client: Client, message: Message):
     if not query or len(query) < 2 or query.startswith("/"): return
     if not client.me: await client.get_me()
 
-    # Settings & Analytics
     await db_users.get_group_status(message.chat.id)
     search_id = await db.save_search_query(query, message.from_user.id)
     asyncio.create_task(analytics.log_search(message.text, query, 0, message.from_user.id, message.chat.id))
 
     if not search_id: return await message.reply("❌ Database Error.")
 
-    # Search (No Filters)
+    # Search & Get Years
     files = await db.get_search_results(query)
+    years = await db.get_unique_years(query) # Fetch years here!
 
     if not files: return 
 
-    # Generate Buttons
-    reply_markup = await btn_parser(search_id, files, client, 0)
+    # Pass 'years' to utils
+    reply_markup = await btn_parser(search_id, files, client, 0, years=years)
 
     await message.reply_text(
         text=f"🔎 **Results for:** `{query}`\n👇 **Select Filters:**",
@@ -43,21 +43,14 @@ async def auto_filter(client: Client, message: Message):
 # ==========================================
 @Client.on_callback_query(filters.regex(r"^(next|filter)_"))
 async def filter_pagination_handler(client: Client, callback: CallbackQuery):
-    """
-    Handles ALL Clicks (Next/Back, Type, Lang, Qual, Year, Size)
-    Format: action_id_off_type_lang_qual_year_size
-    """
     data = callback.data.split("_")
     
     try:
-        # data[0] = action (ignored)
         search_id = int(data[1])
         offset = int(data[2])
         
-        # Helper to clean "None" strings
         def c(v): return None if v == "None" else v
         
-        # Parsing 5 Params safely
         a_type = c(data[3]) if len(data) > 3 else None
         a_lang = c(data[4]) if len(data) > 4 else None
         a_qual = c(data[5]) if len(data) > 5 else None
@@ -67,12 +60,10 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     except (IndexError, ValueError):
         return await callback.answer("❌ Error parsing data.", show_alert=True)
 
-    # 1. Get Query
     query = await db.get_search_query(search_id)
     if not query:
         return await callback.answer("❌ Search Expired.", show_alert=True)
 
-    # 2. DB Search (All Filters)
     files = await db.get_search_results(
         query, 
         file_type=a_type,
@@ -82,21 +73,22 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
         size_key=a_size,
         offset=offset
     )
+    
+    # Fetch Years for the buttons
+    years = await db.get_unique_years(query)
 
-    # 3. Handle Empty Results
     if not files:
         if offset > 0:
             return await callback.answer("⚠️ End of pages.", show_alert=True)
         else:
             await callback.answer("⚠️ No files found for this combo!", show_alert=False)
 
-    # 4. Generate New Buttons
     new_markup = await btn_parser(
         search_id, files, client, offset, 
-        a_type, a_lang, a_qual, a_year, a_size
+        a_type, a_lang, a_qual, a_year, a_size,
+        years=years # Pass years here too
     )
     
-    # 5. Status Text
     status = []
     if a_type: status.append(f"{a_type.title()}")
     if a_lang: status.append(f"{a_lang.title()}")
