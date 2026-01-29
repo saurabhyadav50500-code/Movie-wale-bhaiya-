@@ -2,7 +2,7 @@ import re
 import math
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# --- REGEX PATTERNS (Kept here for ia_filterdb to import) ---
+# --- REGEX PATTERNS ---
 LANG_PATTERNS = {
     "Hindi": re.compile(r'\b(hindi|hin|dub|dual)\b', re.IGNORECASE),
     "English": re.compile(r'\b(english|eng)\b', re.IGNORECASE),
@@ -17,6 +17,19 @@ QUAL_PATTERNS = {
     "4k": re.compile(r'\b(2160p|4k|uhd)\b', re.IGNORECASE),
 }
 
+# --- HELPER FUNCTIONS ---
+def get_file_details(message):
+    media = message.document or message.video or message.audio
+    if not media: return None
+    return {
+        'file_id': media.file_id,
+        'file_unique_id': media.file_unique_id,
+        'file_name': media.file_name or "Unknown",
+        'file_size': media.file_size,
+        'file_type': "video" if message.video else "audio" if message.audio else "document",
+        'mime_type': media.mime_type
+    }
+
 def get_size(size):
     units = ["B", "KB", "MB", "GB", "TB"]
     size = float(size)
@@ -26,16 +39,18 @@ def get_size(size):
         size /= 1024.0
     return "%.2f %s" % (size, units[i])
 
+def generate_link_id(length=8):
+    import secrets, string
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
 # ==========================================
-# 🛠️ BUTTON PARSER (No Database Logic Here)
+# 🛠️ BUTTON PARSER
 # ==========================================
 async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None, a_qual=None, a_year=None, a_size=None, years=None):
-    """
-    Generates buttons. Now accepts 'years' list from autofilter.py.
-    """
     buttons = []
     
-    # 1. FILES
+    # 1. FILE RESULTS
     bot_username = client.me.username if client.me else "Bot"
     if not files:
          buttons.append([InlineKeyboardButton("🤷‍♂️ No results with these filters", callback_data="none")])
@@ -47,11 +62,10 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
             if len(f_name) > 30: f_name = f_name[:27] + "..."
             buttons.append([InlineKeyboardButton(f"📂 {f_name} | {f_size}", url=f_link)])
 
-    # Helper for Safe Strings
     def s(val): return val if val else "None"
     base = f"filter_{search_id}_0"
 
-    # 2. TYPE (Video | Docs)
+    # 2. TYPE
     type_row = []
     for t in ["video", "document"]:
         label = "📹 Videos" if t == "video" else "📂 Docs"
@@ -66,7 +80,7 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
          type_row.append(InlineKeyboardButton("🔄 Reset", callback_data=f"{base}_None_None_None_None_None"))
     buttons.append(type_row)
 
-    # 3. LANGUAGE & QUALITY
+    # 3. LANG & QUAL
     lq_row = []
     for lang in ["Hindi", "English"]:
         l_code = lang.lower()
@@ -81,13 +95,10 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
         lq_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{n_q}_{s(a_year)}_{s(a_size)}"))
     buttons.append(lq_row)
 
-    # 4. YEAR & SIZE
+    # 4. YEARS & SIZE
     ys_row = []
-    
-    # Use the passed years list instead of querying DB
     available_years = years if years else []
-    
-    for year in available_years[:2]: # Show max 2 years
+    for year in available_years[:2]:
         txt = f"✅ {year}" if a_year == year else year
         n_y = "None" if a_year == year else year
         ys_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{n_y}_{s(a_size)}"))
@@ -102,7 +113,6 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
     # 5. PAGINATION
     nav = []
     cb_state = f"{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}"
-    
     if offset >= 10:
         nav.append(InlineKeyboardButton("⬅️ Back", callback_data=f"next_{search_id}_{offset-10}_{cb_state}"))
     
@@ -112,7 +122,6 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
         nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"next_{search_id}_{offset+10}_{cb_state}"))
     
     buttons.append(nav)
-    
     buttons.append([InlineKeyboardButton("♻️ Close", callback_data="recheck_menu")])
 
     return InlineKeyboardMarkup(buttons)
