@@ -4,6 +4,9 @@ import re
 import math
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
+# 👇 Database Import (Required for Smart Year Detection)
+from database.ia_filterdb import db
+
 # ==========================================
 # 1. SMART DETECTION PATTERNS (Regex)
 # ==========================================
@@ -27,7 +30,7 @@ QUAL_PATTERNS = {
 }
 
 # ==========================================
-# 2. GENERAL UTILITIES
+# 2. GENERAL UTILITIES (Old Code Preserved)
 # ==========================================
 
 def get_size(size):
@@ -86,16 +89,15 @@ def get_file_details(message: Message):
     }
 
 # ==========================================
-# 3. SMART BUTTON PARSER
+# 3. SMART BUTTON PARSER (Updated for 4 Layers)
 # ==========================================
 
-async def btn_parser(search_id, files, client, offset=0, active_lang=None, active_qual=None):
+async def btn_parser(search_id, files, client, offset=0, active_lang=None, active_qual=None, active_year=None, active_size=None):
     """
-    Generates buttons with Smart Language & Quality Filters.
+    Generates buttons with 4 Layers of Filters: Lang, Qual, Year, Size.
     
     Callback Data Format: 
-    action_searchID_offset_lang_qual
-    e.g. next_123_10_hindi_720p
+    action_searchID_offset_lang_qual_year_size
     """
     buttons = []
     
@@ -107,7 +109,7 @@ async def btn_parser(search_id, files, client, offset=0, active_lang=None, activ
 
     # --- A. FILE LIST ---
     if not files:
-        # ⚠️ HANDLE ZERO RESULTS: Show dummy button so filters don't vanish
+        # ⚠️ HANDLE ZERO RESULTS
         buttons.append([InlineKeyboardButton("🤷‍♂️ No files found (Try changing filters)", callback_data="none")])
     else:
         for file in files:
@@ -115,7 +117,6 @@ async def btn_parser(search_id, files, client, offset=0, active_lang=None, activ
             f_name = file.get('file_name', 'Unknown File')
             f_size = get_size(file.get('file_size', 0))
             
-            # Smart Truncate to keep buttons neat
             if len(f_name) > 30:
                 f_name = f_name[:27] + "..."
                 
@@ -124,85 +125,108 @@ async def btn_parser(search_id, files, client, offset=0, active_lang=None, activ
                 url=f"https://t.me/{bot_username}?start=file_{f_id}"
             )])
 
-    # --- B. LANGUAGE FILTER ROW ---
+    # Helper for Safe Callback Strings (Avoid 'None' object error)
+    c_lang = active_lang if active_lang else "None"
+    c_qual = active_qual if active_qual else "None"
+    c_year = active_year if active_year else "None"
+    c_size = active_size if active_size else "None"
+
+    # --- B. LANGUAGE ROW ---
     lang_row = []
-    # You can add more languages here
-    langs = ["Hindi", "English", "Tamil", "Telugu"] 
+    langs = ["Hindi", "English", "Tamil"] 
     
     for lang in langs:
-        # Check if this language is currently active
-        is_active = (active_lang == lang.lower())
+        l_code = lang.lower()
+        is_active = (active_lang == l_code)
         
-        # Toggle Logic: Click Active -> Reset to None | Click Inactive -> Set to Lang
         text = f"✅ {lang}" if is_active else lang
-        new_lang = "None" if is_active else lang.lower()
+        next_val = "None" if is_active else l_code # Toggle Logic
         
-        # Preserve the current Quality state (active_qual)
-        # Data: filter_ID_Offset_Lang_Qual
-        current_qual_str = active_qual if active_qual else "None"
-        cb_data = f"filter_{search_id}_0_{new_lang}_{current_qual_str}"
-        
+        # Reset offset to 0 when filter changes
+        cb_data = f"filter_{search_id}_0_{next_val}_{c_qual}_{c_year}_{c_size}"
         lang_row.append(InlineKeyboardButton(text, callback_data=cb_data))
     
     buttons.append(lang_row)
 
-    # --- C. QUALITY FILTER ROW ---
+    # --- C. QUALITY ROW ---
     qual_row = []
     quals = ["480p", "720p", "1080p"]
     
     for qual in quals:
-        is_active = (active_qual == qual.lower())
+        q_code = qual.lower()
+        is_active = (active_qual == q_code)
         
         text = f"✅ {qual}" if is_active else qual
-        new_qual = "None" if is_active else qual.lower()
+        next_val = "None" if is_active else q_code
         
-        # Preserve the current Language state (active_lang)
-        current_lang_str = active_lang if active_lang else "None"
-        cb_data = f"filter_{search_id}_0_{current_lang_str}_{new_qual}"
-        
+        cb_data = f"filter_{search_id}_0_{c_lang}_{next_val}_{c_year}_{c_size}"
         qual_row.append(InlineKeyboardButton(text, callback_data=cb_data))
 
     buttons.append(qual_row)
 
-    # --- D. PAGINATION ---
-    # Format: next_ID_Offset_Lang_Qual
+    # --- D. YEAR ROW (Smart Detection) ---
+    # Fetch available years from DB for this query
+    query = await db.get_search_query(search_id)
+    available_years = await db.get_unique_years(query) if query else []
     
-    total_files = len(files) if files else 0
-    # Note: If 0 files, we still might show pagination buttons if offset > 0 (handled by logic outside)
+    year_row = []
+    # Show max 4 relevant years to save space
+    for year in available_years[:4]: 
+        is_active = (active_year == year)
+        
+        text = f"✅ {year}" if is_active else year
+        next_val = "None" if is_active else year
+        
+        cb_data = f"filter_{search_id}_0_{c_lang}_{c_qual}_{next_val}_{c_size}"
+        year_row.append(InlineKeyboardButton(text, callback_data=cb_data))
     
+    if year_row:
+        buttons.append(year_row)
+
+    # --- E. SIZE ROW ---
+    # Keys: s (<500), m (500-1G), l (1G-2G), xl (>2G)
+    size_row = []
+    sizes = [("s", "<500MB"), ("m", "1GB"), ("l", "2GB"), ("xl", ">2GB")]
+    
+    for key, label in sizes:
+        is_active = (active_size == key)
+        
+        text = f"✅ {label}" if is_active else label
+        next_val = "None" if is_active else key
+        
+        cb_data = f"filter_{search_id}_0_{c_lang}_{c_qual}_{c_year}_{next_val}"
+        size_row.append(InlineKeyboardButton(text, callback_data=cb_data))
+    
+    buttons.append(size_row)
+
+    # --- F. PAGINATION ---
     nav_buttons = []
     
-    # Strings for callback
-    cb_lang = active_lang if active_lang else "None"
-    cb_qual = active_qual if active_qual else "None"
-
     # Back Button
     if offset >= 10:
         nav_buttons.append(
             InlineKeyboardButton(
                 "⬅️ Back", 
-                callback_data=f"next_{search_id}_{offset - 10}_{cb_lang}_{cb_qual}"
+                callback_data=f"next_{search_id}_{offset - 10}_{c_lang}_{c_qual}_{c_year}_{c_size}"
             )
         )
 
-    # Page Counter (Non-clickable)
+    # Page Number
     current_page = math.ceil(offset / 10) + 1
-    nav_buttons.append(
-        InlineKeyboardButton(f"Page {current_page}", callback_data="pages")
-    )
+    nav_buttons.append(InlineKeyboardButton(f"Page {current_page}", callback_data="pages"))
 
-    # Next Button (Only if we have full page of results)
-    if total_files >= 10:
+    # Next Button (Only if we have full page)
+    if len(files) >= 10:
         nav_buttons.append(
             InlineKeyboardButton(
                 "Next ➡️", 
-                callback_data=f"next_{search_id}_{offset + 10}_{cb_lang}_{cb_qual}"
+                callback_data=f"next_{search_id}_{offset + 10}_{c_lang}_{c_qual}_{c_year}_{c_size}"
             )
         )
 
     buttons.append(nav_buttons)
 
     # Close Button
-    buttons.append([InlineKeyboardButton("♻️ Close", callback_data="recheck_menu")])
+    buttons.append([InlineKeyboardButton("♻️ Close / Wrong Result", callback_data="recheck_menu")])
 
     return InlineKeyboardMarkup(buttons)
