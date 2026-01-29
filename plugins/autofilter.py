@@ -7,16 +7,16 @@ from pyrogram.errors import MessageNotModified
 # Database Imports
 from database.ia_filterdb import db
 from database.analytics import analytics
-from database.users_chats_db import db_users  # 👈 NEW: Import Caching DB
+from database.users_chats_db import db_users
 from utils import get_size
 
 # --- CONFIGURATION ---
 BUTTONS_PER_PAGE = 10
 
-async def btn_parser(search_id, files, client, offset=0):
+async def btn_parser(search_id, files, client, offset=0, active_filter=None):
     """
-    Generates buttons using the Integer 'search_id'.
-    Callback Data Format: next_{search_id}_{offset}
+    Generates buttons with File Type Filters.
+    active_filter: 'video', 'document', or None
     """
     end_index = offset + BUTTONS_PER_PAGE
     current_files = files[offset:end_index]
@@ -29,6 +29,7 @@ async def btn_parser(search_id, files, client, offset=0):
     else:
         bot_username = "my_random_bot" # Fallback
 
+    # --- 1. FILE BUTTONS ---
     for file in current_files:
         f_id = file.get('link_id') 
         f_name = file.get('file_name', 'Unknown File')
@@ -45,17 +46,42 @@ async def btn_parser(search_id, files, client, offset=0):
             )]
         )
 
+    # --- 2. FILTER BUTTONS ROW ---
+    # Logic: Data format is filter_{search_id}_{type}
+    
+    filter_row = []
+    
+    # Video Button
+    vid_text = "📹 Videos ✅" if active_filter == "video" else "📹 Videos"
+    filter_row.append(InlineKeyboardButton(vid_text, callback_data=f"filter_{search_id}_video"))
+
+    # Docs Button
+    doc_text = "📂 Docs ✅" if active_filter == "document" else "📂 Docs"
+    filter_row.append(InlineKeyboardButton(doc_text, callback_data=f"filter_{search_id}_document"))
+
+    # All/Reset Button (Only show if a filter is active to save space, or always show)
+    if active_filter is not None:
+        filter_row.append(InlineKeyboardButton("🔄 All Files", callback_data=f"filter_{search_id}_all"))
+
+    buttons.append(filter_row)
+
+    # --- 3. PAGINATION BUTTONS ---
+    # Logic: Data format is next_{search_id}_{offset}_{active_filter}
+    
     total_files = len(files)
     total_pages = math.ceil(total_files / BUTTONS_PER_PAGE)
     current_page = math.ceil(offset / BUTTONS_PER_PAGE) + 1
     
     nav_buttons = []
 
+    # Helper: Convert None to string 'none' for callback data
+    filter_str = active_filter if active_filter else "none"
+
     if offset >= BUTTONS_PER_PAGE:
         nav_buttons.append(
             InlineKeyboardButton(
                 text="⬅️ Back",
-                callback_data=f"next_{search_id}_{offset - BUTTONS_PER_PAGE}"
+                callback_data=f"next_{search_id}_{offset - BUTTONS_PER_PAGE}_{filter_str}"
             )
         )
 
@@ -70,7 +96,7 @@ async def btn_parser(search_id, files, client, offset=0):
         nav_buttons.append(
             InlineKeyboardButton(
                 text="Next ➡️",
-                callback_data=f"next_{search_id}_{end_index}"
+                callback_data=f"next_{search_id}_{end_index}_{filter_str}"
             )
         )
 
@@ -99,47 +125,29 @@ async def auto_filter(client: Client, message: Message):
     if not client.me:
         await client.get_me()
 
-    # 🚀 STEP 1: CHECK GROUP SETTINGS (RAM CACHE)
-    # This hits the LRU Cache first. If cached, it returns instantly (0ms latency).
-    # If not cached, it fetches from DB and saves to RAM.
+    # 🚀 STEP 1: CHECK GROUP SETTINGS
     settings = await db_users.get_group_status(message.chat.id)
-    
-    # Optional: Logic to stop if bot is disabled in this group
-    # if not settings.get('is_enabled', True):
-    #     return
 
-    # 🚀 STEP 2: PARALLEL EXECUTION (Speed Boost)
-    # Search Files & Save Query to DB simultaneously
-    
-    # Task A: Search Files
-    search_task = asyncio.create_task(db.get_search_results(query))
-    
-    # Task B: Save Query to DB (Get Short ID)
+    # 🚀 STEP 2: PARALLEL EXECUTION
+    # Default search: No filter (file_type=None)
+    search_task = asyncio.create_task(db.get_search_results(query, file_type=None))
     save_task = asyncio.create_task(db.save_search_query(query, message.from_user.id))
 
-    # Task C: Log Analytics (Background - No Await needed immediately)
+    # Log Analytics
     asyncio.create_task(
-        analytics.log_search(
-            raw_query=message.text, 
-            cleaned_query=query, 
-            results_count=0, 
-            user_id=message.from_user.id, 
-            chat_id=message.chat.id
-        )
+        analytics.log_search(message.text, query, 0, message.from_user.id, message.chat.id)
     )
 
-    # Wait for both critical tasks (A & B) to finish
     files, search_id = await asyncio.gather(search_task, save_task)
 
     if not files:
         return 
 
     if not search_id:
-        # Rare case if ID generation fails
         return await message.reply("❌ Database Error. Please try again.")
 
-    # Generate Buttons using the Short Integer ID
-    reply_markup = await btn_parser(search_id, files, client, offset=0)
+    # Generate Buttons (active_filter defaults to None)
+    reply_markup = await btn_parser(search_id, files, client, offset=0, active_filter=None)
 
     await message.reply_text(
         text=f"🔎 **Found {len(files)} results for:** `{query}`\n\n👇 **Click below to get file in PM:**",
@@ -149,33 +157,82 @@ async def auto_filter(client: Client, message: Message):
 
 
 # ==========================================
-# 2. PAGINATION HANDLER (Robust & Safe)
+# 2. FILTER HANDLER (NEW: Handles Video/Docs Clicks)
+# ==========================================
+@Client.on_callback_query(filters.regex(r"^filter_"))
+async def filter_handler(client: Client, callback: CallbackQuery):
+    data = callback.data
+    # Format: filter_{search_id}_{type}
+    try:
+        _, str_id, filter_type = data.split("_")
+        search_id = int(str_id)
+    except (ValueError, IndexError):
+        return await callback.answer("❌ Error parsing data.")
+
+    # Determine Database Filter
+    if filter_type == "all":
+        db_filter = None
+    else:
+        db_filter = filter_type # 'video' or 'document'
+
+    # Get Original Query
+    query = await db.get_search_query(search_id)
+    if not query:
+        return await callback.answer("❌ Search Expired.", show_alert=True)
+
+    # Search with New Filter 
+    files = await db.get_search_results(query, file_type=db_filter)
+    
+    if not files:
+        return await callback.answer(f"❌ No {filter_type}s found!", show_alert=True)
+
+    # Generate New Buttons (Reset offset to 0)
+    new_markup = await btn_parser(search_id, files, client, offset=0, active_filter=db_filter)
+
+    try:
+        await callback.edit_message_text(
+            text=f"🔎 **Found {len(files)} results for:** `{query}`\n🔽 **Filter:** {filter_type.title()}",
+            reply_markup=new_markup
+        )
+    except MessageNotModified:
+        pass
+
+
+# ==========================================
+# 3. PAGINATION HANDLER (Updated for Filters)
 # ==========================================
 @Client.on_callback_query(filters.regex(r"^next_"))
 async def next_page_handler(client: Client, callback: CallbackQuery):
     data = callback.data
     
     try:
-        # Data format: next_{search_id}_{offset}
-        _, str_id, str_offset = data.split("_", 2)
-        offset = int(str_offset)
+        # Data format: next_{search_id}_{offset}_{filter_type}
+        parts = data.split("_")
+        str_id = parts[1]
+        offset = int(parts[2])
+        
+        # Check for filter part (Backward compatibility)
+        if len(parts) > 3:
+            filter_str = parts[3]
+            active_filter = None if filter_str == "none" else filter_str
+        else:
+            active_filter = None
+
     except (ValueError, IndexError):
         return await callback.answer("❌ Error parsing data.", show_alert=True)
 
-    # 🛡️ SAFETY CHECK: Handle Invalid/None IDs
     if not str_id.isdigit():
          return await callback.answer("❌ Invalid Search ID.", show_alert=True)
          
     search_id = int(str_id)
 
-    # 1. Fetch Original Query from DB using Integer ID
+    # 1. Fetch Query
     query = await db.get_search_query(search_id)
-    
     if not query:
-        return await callback.answer("❌ Search Expired (48h Limit). Please search again.", show_alert=True)
+        return await callback.answer("❌ Search Expired.", show_alert=True)
 
-    # 2. Search Again using the saved query
-    files = await db.get_search_results(query)
+    # 2. Search (Pass the active filter)
+    files = await db.get_search_results(query, file_type=active_filter)
     
     if not files:
         return await callback.answer("❌ No files found.", show_alert=True)
@@ -183,8 +240,8 @@ async def next_page_handler(client: Client, callback: CallbackQuery):
     if not client.me:
         await client.get_me()
 
-    # 3. Generate New Buttons
-    new_markup = await btn_parser(search_id, files, client, offset=offset)
+    # 3. Generate New Buttons (Pass the active filter)
+    new_markup = await btn_parser(search_id, files, client, offset=offset, active_filter=active_filter)
 
     try:
         await callback.edit_message_reply_markup(reply_markup=new_markup)
@@ -195,20 +252,13 @@ async def next_page_handler(client: Client, callback: CallbackQuery):
 
 
 # ==========================================
-# 3. FILE DELIVERY HANDLER (Priority High)
+# 4. FILE DELIVERY & CLOSE HANDLERS (Unchanged)
 # ==========================================
 @Client.on_message(filters.command("start") & filters.private, group=-1)
 async def file_delivery_handler(client: Client, message: Message):
-    """
-    Handles deep link delivery. High priority.
-    """
-    if len(message.command) < 2:
-        return
-    
+    if len(message.command) < 2: return
     payload = message.command[1]
-    
-    if not payload.startswith("file_"):
-        return
+    if not payload.startswith("file_"): return
 
     try:
         link_id = payload.split("file_", 1)[1]
@@ -216,13 +266,9 @@ async def file_delivery_handler(client: Client, message: Message):
         return await message.reply("❌ Invalid Link Format")
 
     file_info = await db.get_file_by_link_id(link_id)
-    
-    if not file_info:
-        return await message.reply("❌ File not found (Deleted or Invalid).")
+    if not file_info: return await message.reply("❌ File not found.")
 
-    # Add User to DB (Optional: Track users who start bot)
     await db_users.add_user(message.from_user.id, message.from_user.first_name)
-
     status_msg = await message.reply("📂 **Found File! Sending now...**")
 
     try:
@@ -232,20 +278,14 @@ async def file_delivery_handler(client: Client, message: Message):
             caption=file_info['caption'] or "",
         )
         await status_msg.delete()
-    
     except Exception as e:
         print(f"Error Sending File: {e}")
-        # If deleted from Telegram, remove from DB
         if "MEDIA_EMPTY" in str(e) or "400" in str(e):
              await db.col.delete_one({"link_id": link_id})
-             await status_msg.edit("❌ **File Expired:** This file was deleted from Telegram servers.")
+             await status_msg.edit("❌ **File Expired:** Deleted from Telegram.")
         else:
-             await status_msg.edit(f"❌ Error sending file: {str(e)}")
+             await status_msg.edit(f"❌ Error: {str(e)}")
 
-
-# ==========================================
-# 4. CLOSE HANDLER
-# ==========================================
 @Client.on_callback_query(filters.regex(r"^recheck_menu"))
 async def close_handler(client: Client, callback: CallbackQuery):
     await callback.message.delete()
