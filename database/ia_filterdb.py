@@ -29,10 +29,98 @@ class Media:
             logger.error(f"❌ Error creating index: {e}")
 
     # ==========================================
-    # 🔎 SEARCH LOGIC (Optimized)
+    # 🔎 HYBRID SEARCH (Atlas + Regex Fallback)
     # ==========================================
     async def get_search_results(self, query, file_type=None, lang=None, quality=None, year=None, size_key=None, offset=0, limit=10):
-        """Master Search Function."""
+        """
+        Smart Search: Tries Atlas Search (Fuzzy) first.
+        If that fails, it uses the Original Regex Search.
+        """
+        try:
+            # 🚀 METHOD 1: ATLAS SEARCH (Fuzzy Logic)
+            # Note: Requires an Atlas Search Index named 'default' on MongoDB website
+            pipeline = [
+                {
+                    "$search": {
+                        "index": "default",
+                        "text": {
+                            "query": query,
+                            "path": "file_name",
+                            "fuzzy": {"maxEdits": 2} # Allows 2 spelling mistakes
+                        }
+                    }
+                }
+            ]
+
+            # --- FILTERS FOR ATLAS ---
+            match_stage = {}
+
+            # 1. File Type
+            if file_type and file_type != "None":
+                match_stage["file_type"] = file_type
+
+            # 2. Size Filter
+            if size_key and size_key != "None":
+                if size_key == "s": match_stage["file_size"] = {"$lt": 524288000}
+                elif size_key == "m": match_stage["file_size"] = {"$gte": 524288000, "$lt": 1073741824}
+                elif size_key == "l": match_stage["file_size"] = {"$gte": 1073741824, "$lt": 2147483648}
+                elif size_key == "xl": match_stage["file_size"] = {"$gte": 2147483648}
+
+            # 3. Regex Filters (Lang, Qual, Year)
+            and_conditions = []
+            
+            if lang and lang != "None":
+                key = lang.capitalize()
+                if key in LANG_PATTERNS:
+                    pat = LANG_PATTERNS[key]
+                    and_conditions.append({"$or": [{"file_name": {"$regex": pat}}, {"caption": {"$regex": pat}}]})
+
+            if quality and quality != "None":
+                if quality in QUAL_PATTERNS:
+                    pat = QUAL_PATTERNS[quality]
+                else:
+                    pat = re.compile(rf'\b{quality}\b', re.IGNORECASE)
+                and_conditions.append({"file_name": {"$regex": pat}})
+
+            if year and year != "None":
+                and_conditions.append({"file_name": {"$regex": re.compile(rf'\b{year}\b')}})
+
+            # Combine Filters
+            if and_conditions:
+                match_stage["$and"] = and_conditions
+
+            if match_stage:
+                pipeline.append({"$match": match_stage})
+
+            # Pagination
+            pipeline.extend([
+                {"$skip": offset},
+                {"$limit": limit}
+            ])
+
+            cursor = self.col.aggregate(pipeline)
+            results = await cursor.to_list(length=limit)
+            
+            # Agar results milein to return karo, nahi to fallback par jao
+            if results:
+                return results
+            else:
+                # Agar Atlas ne 0 result diye, to maybe regex se kuch mil jaye
+                return await self.get_search_results_fallback(query, file_type, lang, quality, year, size_key, offset, limit)
+
+        except Exception as e:
+            # ⚠️ Agar Atlas Index nahi bana hai ya error aaye, to Purana Code chalega
+            # logger.error(f"Atlas Error (Using Fallback): {e}")
+            return await self.get_search_results_fallback(query, file_type, lang, quality, year, size_key, offset, limit)
+
+    # ==========================================
+    # 🔎 OLD REGEX SEARCH (Fallback)
+    # ==========================================
+    async def get_search_results_fallback(self, query, file_type=None, lang=None, quality=None, year=None, size_key=None, offset=0, limit=10):
+        """
+        Ye apka PURANA ORIGINAL CODE hai.
+        Iska naam badal kar 'fallback' rakh diya hai taaki backup mein use ho.
+        """
         # 1. Base Text Search
         regex_query = re.escape(query)
         words = query.split()
@@ -89,6 +177,10 @@ class Media:
             logger.error(f"Search Error: {e}")
             return []
 
+    # ==========================================
+    # 📅 UTILS & SAVING (Purana Code Same to Same)
+    # ==========================================
+
     async def get_unique_years(self, query):
         """Fetch years from results."""
         regex_query = re.escape(query)
@@ -109,9 +201,6 @@ class Media:
         except:
             return []
 
-    # ==========================================
-    # 💾 FILE SAVING & UTILS
-    # ==========================================
     async def get_next_sequence(self):
         doc = await self.seq_col.find_one_and_update(
             {"_id": "search_id"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True)
