@@ -3,44 +3,80 @@ from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message
 from pyrogram.errors import MessageNotModified
 
+# Database & Utils Imports
 from database.ia_filterdb import db
 from database.analytics import analytics
 from database.users_chats_db import db_users
 from utils import btn_parser
 
+# ==========================================
+# 1. TEXT HANDLERS (Group & PM)
+# ==========================================
+
+# Handler for GROUPS (Silent if no result)
 @Client.on_message(filters.text & filters.group)
-async def auto_filter(client: Client, message: Message):
+async def auto_filter_group(client: Client, message: Message):
+    await process_search(client, message, is_pm=False)
+
+# Handler for PM/PRIVATE (Reply "No Found" if no result)
+@Client.on_message(filters.text & filters.private)
+async def auto_filter_pm(client: Client, message: Message):
+    await process_search(client, message, is_pm=True)
+
+# Common Search Function
+async def process_search(client, message, is_pm):
     query = message.text
+    # Basic validation
     if not query or len(query) < 2 or query.startswith("/"): return
     if not client.me: await client.get_me()
 
-    await db_users.get_group_status(message.chat.id)
+    # Settings check (Group only)
+    if not is_pm:
+        await db_users.get_group_status(message.chat.id)
+    
+    # Save Query for Analytics & ID
     search_id = await db.save_search_query(query, message.from_user.id)
     asyncio.create_task(analytics.log_search(message.text, query, 0, message.from_user.id, message.chat.id))
 
-    if not search_id: return await message.reply("❌ DB Error.")
+    if not search_id: 
+        if is_pm: await message.reply("❌ Database Error.")
+        return
 
+    # 🔎 Search in DB
     files = await db.get_search_results(query)
-    years = await db.get_unique_years(query) # Fetch years
+    years = await db.get_unique_years(query) # Fetch years for filter buttons
 
-    if not files: return 
+    # Result Handling
+    if not files:
+        if is_pm:
+            # PM mein user ko batana zaroori hai
+            await message.reply_text(f"❌ **No Results Found for:** `{query}`\n\nKripya spelling check karein.")
+        return # Group mein silent rahenge
 
+    # Generate Buttons
     reply_markup = await btn_parser(search_id, files, client, 0, years=years)
 
     await message.reply_text(
         text=f"🔎 **Results for:** `{query}`\n👇 **Select Filters:**",
         reply_markup=reply_markup,
-        quote=True
+        quote=True if not is_pm else False
     )
 
+# ==========================================
+# 2. CALLBACK HANDLER (Filters & Pagination)
+# ==========================================
 @Client.on_callback_query(filters.regex(r"^(next|filter)_"))
 async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     data = callback.data.split("_")
     try:
+        # Data format: action_id_offset_type_lang_qual_year_size
         search_id = int(data[1])
         offset = int(data[2])
+        
+        # Helper to convert "None" string to None object
         def c(v): return None if v == "None" else v
         
+        # Safely parse 7 parameters
         a_type = c(data[3]) if len(data) > 3 else None
         a_lang = c(data[4]) if len(data) > 4 else None
         a_qual = c(data[5]) if len(data) > 5 else None
@@ -54,11 +90,17 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     if not query:
         return await callback.answer("❌ Search Expired.", show_alert=True)
 
+    # Search with Filters
     files = await db.get_search_results(
-        query, file_type=a_type, lang=a_lang, quality=a_qual, 
-        year=a_year, size_key=a_size, offset=offset
+        query, 
+        file_type=a_type, 
+        lang=a_lang, 
+        quality=a_qual, 
+        year=a_year, 
+        size_key=a_size, 
+        offset=offset
     )
-    years = await db.get_unique_years(query)
+    years = await db.get_unique_years(query) # Refresh years
 
     if not files:
         if offset > 0:
@@ -66,11 +108,13 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
         else:
             await callback.answer("⚠️ No files found for this combo!", show_alert=False)
 
+    # Update Buttons
     new_markup = await btn_parser(
         search_id, files, client, offset, 
         a_type, a_lang, a_qual, a_year, a_size, years=years
     )
     
+    # Status Text Update
     status = []
     if a_type: status.append(f"{a_type.title()}")
     if a_lang: status.append(f"{a_lang.title()}")
@@ -86,23 +130,39 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     except MessageNotModified:
         pass
 
+# ==========================================
+# 3. FILE DELIVERY (Start with File ID)
+# ==========================================
 @Client.on_message(filters.command("start") & filters.private, group=-1)
 async def file_delivery_handler(client, message):
     if len(message.command) < 2 or not message.command[1].startswith("file_"): return
+    
     link_id = message.command[1].split("file_", 1)[1]
     file_info = await db.get_file_by_link_id(link_id)
-    if not file_info: return await message.reply("❌ File not found.")
+    
+    if not file_info: 
+        return await message.reply("❌ File not found (Deleted or Invalid).")
     
     await db_users.add_user(message.from_user.id, message.from_user.first_name)
     s_msg = await message.reply("📂 **Sending File...**")
+    
     try:
-        await client.send_cached_media(message.from_user.id, file_info['file_id'], caption=file_info['caption'])
+        await client.send_cached_media(
+            message.from_user.id, 
+            file_info['file_id'], 
+            caption=file_info['caption'] or ""
+        )
         await s_msg.delete()
     except Exception as e:
         await s_msg.edit(f"❌ Error: {e}")
 
+# ==========================================
+# 4. MISC HANDLERS (Pages, Close)
+# ==========================================
 @Client.on_callback_query(filters.regex("pages"))
-async def pages_handler(_, cb): await cb.answer("Current Page", show_alert=True)
+async def pages_handler(_, cb): 
+    await cb.answer("ℹ️ Current Page", show_alert=True)
 
 @Client.on_callback_query(filters.regex("recheck_menu"))
-async def close_handler(_, cb): await cb.message.delete()
+async def close_handler(_, cb): 
+    await cb.message.delete()
