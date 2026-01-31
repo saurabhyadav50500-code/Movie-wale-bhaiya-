@@ -6,47 +6,52 @@ from flask import Flask
 
 # Pyrogram Imports
 from pyrogram import Client, idle
-from pyrogram import errors
 
 # Config Imports
 from info import API_ID, API_HASH, BOT_TOKEN
 
-# Database Imports (Ye tabhi chalega jab database/__init__.py maujood ho)
+# Database Imports 
+# (Ye tabhi chalega jab database/__init__.py bana loge!)
 from database.ia_filterdb import db
 from database.analytics import analytics
 
-# 1. Logger Setup (Errors dekhne ke liye)
+# 1. Logger Setup (Sirf Errors aur Bot Status dikhega)
 logging.basicConfig(
     level=logging.INFO,
-    format="[%(asctime)s - %(levelname)s] - %(name)s - %(message)s",
-    datefmt='%d-%b-%y %H:%M:%S',
+    format="[%(asctime)s] %(message)s",
+    datefmt='%H:%M:%S',
     handlers=[logging.StreamHandler()]
 )
+
+# Pyrogram ke faaltu logs ko chup karana (WARNING level only)
+logging.getLogger("pyrogram").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
-# 2. Webserver (Render/Koyeb ke liye)
+# 2. Webserver (Render ke liye)
 app_web = Flask(__name__)
 
 @app_web.route('/')
 def hello_world():
-    return 'Mera Bot Start Ho Gaya Hai!'
+    return 'Bot Live Hai!'
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
     app_web.run(host='0.0.0.0', port=port)
 
-# 3. Bot Client Definition
+# 3. Bot Client
 app = Client(
     "my_search_bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    plugins=dict(root="plugins")  # 👈 Ye folder sahi hona chahiye
+    plugins=dict(root="plugins") 
 )
 
 async def start_bot():
     print("-----------------------------------------")
-    print("🚀 System Booting...")
+    print("🚀 Bot Start Ho Raha Hai...")
     
     # Webserver start
     t = threading.Thread(target=run_web_server)
@@ -56,30 +61,28 @@ async def start_bot():
     # Bot Start
     try:
         await app.start()
-        print("✅ Bot Client Connected!")
+        print("✅ Telegram Se Connect Ho Gaya!")
     except Exception as e:
-        print(f"❌ Bot Token/API Error: {e}")
+        print(f"❌ Telegram Connection Error: {e}")
         return
 
     # Database Check
-    print("⏳ Checking Database Connection...")
+    print("⏳ Database Check Kar Raha Hoon...")
     try:
         await db.ensure_indexes()
         await analytics.ensure_indexes()
-        print("✅ Database Connected & Indexes Ready!")
+        print("✅ Database Connected Successfully!")
     except Exception as e:
         print(f"⚠️ Database Error: {e}")
-        print("❌ Shayad 'database/__init__.py' file missing hai ya MongoDB URL galat hai.")
+        print("❌ 'database/__init__.py' abhi bhi missing hai shayad!")
 
-    # Bot Info Print
     me = await app.get_me()
-    print(f"🤖 Bot Started as: @{me.username}")
+    print(f"🤖 Bot Start Ho Gaya: @{me.username}")
+    print("➡️ Ab Telegram par /start bhejo")
     print("-----------------------------------------")
     
-    await idle()  # Bot ko yahan roke rakho
-    
+    await idle()
     await app.stop()
-    print("🔴 Bot Stopped.")
 
 if __name__ == "__main__":
     app.run(start_bot())
