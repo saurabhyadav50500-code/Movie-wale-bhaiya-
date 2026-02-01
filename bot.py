@@ -4,7 +4,7 @@ import os
 import threading
 import asyncio
 from flask import Flask
-from pyrogram import Client, idle
+from pyrogram import Client, idle, filters  # 'filters' add kiya hai test ke liye
 from info import API_ID, API_HASH, BOT_TOKEN
 
 # Database Imports
@@ -42,10 +42,25 @@ app = Client(
     plugins=dict(root="plugins") 
 )
 
+# 🚨 EMERGENCY TEST HANDLER 🚨
+# Ye bina plugins folder ke chalega. Agar ye chala, to bot 100% sahi hai, bas folder mein galti hai.
+@app.on_message(filters.command("check"))
+async def check_handler(client, message):
+    await message.reply_text("✅ **Bot Zinda Hai!**\nProblem 'plugins' folder ya files mein hai, bot mein nahi.")
+
 async def start_bot():
     print("-----------------------------------------", flush=True)
     print("🚀 Bot Start Ho Raha Hai...", flush=True)
     
+    # Debugging: Check Plugins Folder
+    if os.path.exists("plugins"):
+        files = os.listdir("plugins")
+        print(f"📂 Plugins Folder Files: {files}", flush=True)
+        if "commands.py" not in files:
+            print("❌ DANGER: 'commands.py' plugins folder mein nahi hai!", flush=True)
+    else:
+        print("❌ CRITICAL: 'plugins' folder hi gayab hai!", flush=True)
+
     # Webserver start
     t = threading.Thread(target=run_web_server)
     t.daemon = True
@@ -58,28 +73,24 @@ async def start_bot():
         print(f"❌ Connection Error: {e}", flush=True)
         return
 
-    # --- DATABASE CONNECTION (With Timeout Fix) ---
+    # --- DATABASE CONNECTION ---
     print("⏳ Database Connecting...", flush=True)
     try:
-        # Timeout lagaya hai taki bot atke nahi
         await asyncio.wait_for(db.ensure_indexes(), timeout=10.0)
         print("✅ Main Database Ready!", flush=True)
         
         try:
             await asyncio.wait_for(analytics.ensure_indexes(), timeout=5.0)
             print("✅ Analytics Database Ready!", flush=True)
-        except asyncio.TimeoutError:
-            print("⚠️ Analytics Slow tha, Skip kar diya (Bot chalega!)", flush=True)
-        except Exception as e:
-            print(f"⚠️ Analytics Error: {e}", flush=True)
+        except:
+            print("⚠️ Analytics Skipped", flush=True)
             
     except Exception as e:
         print(f"❌ Main Database Error: {e}", flush=True)
 
-    # --- CONFIRMATION ---
     me = await app.get_me()
     print(f"🤖 Bot Started as: @{me.username}", flush=True)
-    print("➡️ Ab Telegram par /start bhejo!", flush=True)
+    print("➡️ Telegram par '/check' bhejo!", flush=True)
     print("-----------------------------------------", flush=True)
     
     await idle()
