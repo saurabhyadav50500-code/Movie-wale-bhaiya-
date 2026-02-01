@@ -2,6 +2,7 @@ import logging
 import re
 from motor.motor_asyncio import AsyncIOMotorClient
 from info import MONGO_URI, DATABASE_NAME, COLLECTION_NAME
+# 👇 Corrected Import: utils functions yahan import hone chahiye
 from utils import get_file_details, generate_link_id, LANG_PATTERNS, QUAL_PATTERNS
 
 logger = logging.getLogger(__name__)
@@ -228,27 +229,32 @@ class Media:
 
     async def save_file(self, message):
         """Saves a file to DB."""
-        file_info = get_file_details(message)
-        if not file_info: return False
+        # Use try-except to prevent crashing
+        try:
+            file_info = get_file_details(message)
+            if not file_info: return False
 
-        # Check Duplicate
-        if await self.col.find_one({'file_unique_id': file_info['file_unique_id']}):
+            # Check Duplicate
+            if await self.col.find_one({'file_unique_id': file_info['file_unique_id']}):
+                return False
+
+            doc = {
+                'file_id': file_info['file_id'],
+                'file_unique_id': file_info['file_unique_id'],
+                'file_name': file_info['file_name'],
+                'file_size': file_info['file_size'],
+                'file_type': file_info['file_type'],
+                'mime_type': file_info['mime_type'],
+                'caption': message.caption or "",
+                'chat_id': message.chat.id,
+                'message_id': message.id,
+                'link_id': generate_link_id()
+            }
+            await self.col.insert_one(doc)
+            return True
+        except Exception as e:
+            logger.error(f"Error Saving File: {e}")
             return False
-
-        doc = {
-            'file_id': file_info['file_id'],
-            'file_unique_id': file_info['file_unique_id'],
-            'file_name': file_info['file_name'],
-            'file_size': file_info['file_size'],
-            'file_type': file_info['file_type'],
-            'mime_type': file_info['mime_type'],
-            'caption': message.caption or "",
-            'chat_id': message.chat.id,
-            'message_id': message.id,
-            'link_id': generate_link_id()
-        }
-        await self.col.insert_one(doc)
-        return True
 
     async def delete_all_files(self):
         await self.col.delete_many({})
