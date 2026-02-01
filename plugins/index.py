@@ -5,7 +5,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from info import ADMINS
 from database.ia_filterdb import db
 
-# Session Storage (Bot restart hone par ye khali ho jata hai)
+# Session Storage
 INDEX_SESSION = {}
 
 # ==========================================
@@ -13,9 +13,12 @@ INDEX_SESSION = {}
 # ==========================================
 @Client.on_message(filters.command("index") & filters.user(ADMINS))
 async def start_index_step1(bot: Client, message: Message):
-    """Admin se last message maangta hai."""
+    """Step 1: Admin se last message maangta hai."""
     user_id = message.from_user.id
+    # Session start karein
     INDEX_SESSION[user_id] = {'step': 'waiting_forward'}
+    
+    print(f"DEBUG: Index process started for {user_id}") # Debug Log
     
     await message.reply_text(
         "🆔 **Indexing Step 1:**\n\n"
@@ -28,26 +31,31 @@ async def start_index_step1(bot: Client, message: Message):
 # ==========================================
 @Client.on_message(filters.forwarded & filters.user(ADMINS))
 async def handle_forward_step2(bot: Client, message: Message):
-    """Forwarded message se Channel ID aur Message ID nikalta hai."""
+    """Step 2: Channel ID capture karta hai."""
     user_id = message.from_user.id
     
-    # Check if user is in session
-    if user_id not in INDEX_SESSION or INDEX_SESSION[user_id]['step'] != 'waiting_forward':
+    # Check karein ki user ka session active hai ya nahi
+    if user_id not in INDEX_SESSION:
+        # Agar session nahi hai, to ignore karein (shayad purana forward ho)
+        return
+
+    if INDEX_SESSION[user_id]['step'] != 'waiting_forward':
         return
 
     if not message.forward_from_chat:
         return await message.reply("❌ Ye Message Channel se forwarded nahi lag raha.")
 
-    # Data Extract
     target_chat_id = message.forward_from_chat.id
     last_msg_id = message.forward_from_message_id
 
-    # Update Session
+    # Session Update
     INDEX_SESSION[user_id].update({
         'step': 'waiting_skip',
         'channel_id': target_chat_id,
         'last_msg_id': last_msg_id
     })
+    
+    print(f"DEBUG: Channel Detected: {target_chat_id} Last ID: {last_msg_id}") # Debug Log
 
     await message.reply_text(
         f"✅ **Detected Channel:** `{message.forward_from_chat.title}`\n"
@@ -56,33 +64,41 @@ async def handle_forward_step2(bot: Client, message: Message):
     )
 
 # ==========================================
-# STEP 3: HANDLE SKIP NUMBER (Modified for Safety)
+# STEP 3: HANDLE SKIP NUMBER (Fix Yahan Hai)
 # ==========================================
 @Client.on_message(filters.text & filters.user(ADMINS) & ~filters.command(["index", "start", "broadcast"]))
 async def handle_skip_step3(bot: Client, message: Message):
-    """User se skip number leta hai."""
+    """Step 3: Skip number leta hai."""
     user_id = message.from_user.id
-    
-    # 🛑 SAFETY CHECK: Agar Session expire ho gaya hai to user ko batao
+    text = message.text
+
+    # --- 🛑 SAFETY CHECK (Agar Bot Restart Hua Ho) ---
     if user_id not in INDEX_SESSION:
-        # Agar user koi number bhej raha hai par session nahi hai, to shayad bot restart hua hai
-        if message.text.isdigit():
-            await message.reply("⚠️ **Session Expired / Bot Restarted.**\nKripya `/index` command dubara shuru karein.")
+        # Agar koi number bheje lekin session na ho, to batao ki restart hua hai
+        if text.isdigit():
+            await message.reply(
+                "⚠️ **Bot Restart Hua Tha!**\n"
+                "Aapka purana session expire ho gaya hai.\n\n"
+                "Kripya **/index** command dubara shuru karein."
+            )
         return
 
+    # Agar step galat hai to return
     if INDEX_SESSION[user_id]['step'] != 'waiting_skip':
         return
 
     try:
-        skip_num = int(message.text)
+        skip_num = int(text)
     except ValueError:
-        return await message.reply("❌ Kripya valid number likhein (Ex: 0).")
+        return await message.reply("❌ Kripya sirf number likhein (Ex: 0).")
 
     session = INDEX_SESSION[user_id]
     session['skip'] = skip_num
     session['step'] = 'waiting_confirm'
 
     total_files = session['last_msg_id'] - skip_num
+    
+    print(f"DEBUG: Skip Confirmed: {skip_num}. Total to scan: {total_files}") # Debug Log
 
     buttons = InlineKeyboardMarkup([
         [
@@ -102,7 +118,7 @@ async def handle_skip_step3(bot: Client, message: Message):
     )
 
 # ==========================================
-# STEP 4: CORE INDEXING LOGIC
+# STEP 4: CORE INDEXING PROCESS
 # ==========================================
 @Client.on_callback_query(filters.regex(r"^idx_"))
 async def index_process_handler(bot: Client, query: CallbackQuery):
@@ -115,25 +131,25 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
         return
 
     if user_id not in INDEX_SESSION:
-        return await query.answer("⚠️ Session Expired. Dobara /index karein.", show_alert=True)
+        return await query.answer("⚠️ Session Expired. /index dubara karein.", show_alert=True)
 
-    # Load Variables
+    # Load Data
     session = INDEX_SESSION[user_id]
     chat_id = session['channel_id']
     last_msg_id = session['last_msg_id']
     current_id = session['skip'] + 1
     
-    del INDEX_SESSION[user_id] # Clear session to free memory
+    # Session Clean
+    del INDEX_SESSION[user_id]
 
-    msg = await query.message.edit("⏳ **Initializing Indexing...**")
+    msg = await query.message.edit("⏳ **Initializing...**")
 
-    # Stats
     total_scanned = 0
     indexed_files = 0
     duplicate_files = 0
     deleted_msgs = 0
     
-    CHUNK_SIZE = 200 
+    CHUNK_SIZE = 200
 
     try:
         while current_id <= last_msg_id:
@@ -143,9 +159,10 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
             if not ids_to_fetch: break
 
             try:
+                # Messages Fetch
                 messages = await bot.get_messages(chat_id, ids_to_fetch)
             except FloodWait as e:
-                await asyncio.sleep(e.value + 2)
+                await asyncio.sleep(e.value + 5)
                 messages = await bot.get_messages(chat_id, ids_to_fetch)
             except Exception as e:
                 print(f"Fetch Error: {e}")
@@ -154,7 +171,6 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
 
             for m in messages:
                 total_scanned += 1
-                
                 if not m or m.empty:
                     deleted_msgs += 1
                     continue
@@ -162,42 +178,38 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
                 # Check Media
                 if m.document or m.video or m.audio:
                     try:
-                        # ⚠️ IMPORTANT: Ye call ia_filterdb.py ke save_file ko jata hai
+                        # ⚠️ DB SAVE CHECK
                         is_saved = await db.save_file(m)
-                        if is_saved:
-                            indexed_files += 1
-                        else:
-                            duplicate_files += 1
+                        if is_saved: indexed_files += 1
+                        else: duplicate_files += 1
                     except Exception as e:
-                        print(f"Save Error: {e}")
+                        print(f"DB Error: {e}")
                 else:
                     deleted_msgs += 1
 
             # Update Status
             try:
                 await msg.edit(
-                    f"🔄 **Indexing in Progress...**\n\n"
-                    f"🔢 **Scanned:** `{total_scanned}` / `{last_msg_id}`\n"
-                    f"💾 **Saved:** `{indexed_files}`\n"
-                    f"♻️ **Duplicates:** `{duplicate_files}`\n"
-                    f"🗑 **Skipped:** `{deleted_msgs}`"
+                    f"🔄 **Indexing...**\n"
+                    f"Scanned: {total_scanned}/{last_msg_id}\n"
+                    f"Saved: {indexed_files}\n"
+                    f"Duplicates: {duplicate_files}"
                 )
             except FloodWait as e:
                 await asyncio.sleep(e.value)
             except MessageNotModified:
                 pass
             except Exception:
-                pass 
+                pass
 
             current_id += CHUNK_SIZE
 
-        # Final Message
         await msg.edit(
-            f"✅ **Indexing Completed!**\n\n"
-            f"📊 **Scanned:** `{total_scanned}`\n"
-            f"💾 **Saved:** `{indexed_files}`\n"
-            f"♻️ **Duplicates:** `{duplicate_files}`"
+            f"✅ **Indexing Complete!**\n\n"
+            f"💾 Saved: `{indexed_files}`\n"
+            f"♻️ Duplicates: `{duplicate_files}`\n"
+            f"🗑 Empty/Skip: `{deleted_msgs}`"
         )
 
     except Exception as e:
-        await msg.edit(f"❌ Critical Error: {str(e)}")
+        await msg.edit(f"❌ Error: {e}")
