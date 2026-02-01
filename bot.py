@@ -54,26 +54,17 @@ async def start_bot():
     try:
         await app.start()
         print("✅ Telegram Se Connect Ho Gaya!", flush=True)
-        
-        # --- FIX: Purana Webhook Delete Karein ---
-        # Agar bot reply nahi kar raha, to ye line magic ki tarah kaam karegi
-        print("🧹 Checking/Clearing Webhooks...", flush=True)
-        await app.delete_webhook()
-        print("✅ Webhook Cleared! Polling ab sahi chalegi.", flush=True)
-
     except Exception as e:
         print(f"❌ Connection Error: {e}", flush=True)
         return
 
-    # --- DATABASE CONNECTION (Safe Mode) ---
+    # --- DATABASE CONNECTION (With Timeout Fix) ---
     print("⏳ Database Connecting...", flush=True)
     try:
-        # Pehle Main DB check karein
-        # 10 Second ka timeout diya hai taaki bot atke nahi
+        # Timeout lagaya hai taki bot atke nahi
         await asyncio.wait_for(db.ensure_indexes(), timeout=10.0)
         print("✅ Main Database Ready!", flush=True)
         
-        # Analytics ko try karein
         try:
             await asyncio.wait_for(analytics.ensure_indexes(), timeout=5.0)
             print("✅ Analytics Database Ready!", flush=True)
@@ -84,18 +75,10 @@ async def start_bot():
             
     except Exception as e:
         print(f"❌ Main Database Error: {e}", flush=True)
-        print("⚠️ Bot bina DB ke start ho raha hai (Search kaam nahi karega)", flush=True)
 
     # --- CONFIRMATION ---
     me = await app.get_me()
     print(f"🤖 Bot Started as: @{me.username}", flush=True)
-    
-    # Plugins Check
-    if os.path.exists("plugins"):
-        print(f"📂 Plugins Folder Detected.", flush=True)
-    else:
-        print(f"❌ WARNING: 'plugins' folder nahi mila! Naam check karein.", flush=True)
-
     print("➡️ Ab Telegram par /start bhejo!", flush=True)
     print("-----------------------------------------", flush=True)
     
