@@ -5,11 +5,11 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from info import ADMINS
 from database.ia_filterdb import db
 
-# Session Storage to track user steps
+# Session Storage (Bot restart hone par ye khali ho jata hai)
 INDEX_SESSION = {}
 
 # ==========================================
-# STEP 1: INITIAL COMMAND (/index)
+# STEP 1: INITIAL COMMAND
 # ==========================================
 @Client.on_message(filters.command("index") & filters.user(ADMINS))
 async def start_index_step1(bot: Client, message: Message):
@@ -56,14 +56,21 @@ async def handle_forward_step2(bot: Client, message: Message):
     )
 
 # ==========================================
-# STEP 3: HANDLE SKIP NUMBER
+# STEP 3: HANDLE SKIP NUMBER (Modified for Safety)
 # ==========================================
 @Client.on_message(filters.text & filters.user(ADMINS) & ~filters.command(["index", "start", "broadcast"]))
 async def handle_skip_step3(bot: Client, message: Message):
-    """User se skip number leta hai aur confirmation button deta hai."""
+    """User se skip number leta hai."""
     user_id = message.from_user.id
     
-    if user_id not in INDEX_SESSION or INDEX_SESSION[user_id]['step'] != 'waiting_skip':
+    # 🛑 SAFETY CHECK: Agar Session expire ho gaya hai to user ko batao
+    if user_id not in INDEX_SESSION:
+        # Agar user koi number bhej raha hai par session nahi hai, to shayad bot restart hua hai
+        if message.text.isdigit():
+            await message.reply("⚠️ **Session Expired / Bot Restarted.**\nKripya `/index` command dubara shuru karein.")
+        return
+
+    if INDEX_SESSION[user_id]['step'] != 'waiting_skip':
         return
 
     try:
@@ -95,76 +102,67 @@ async def handle_skip_step3(bot: Client, message: Message):
     )
 
 # ==========================================
-# STEP 4: CORE INDEXING LOGIC (OPTIMIZED)
+# STEP 4: CORE INDEXING LOGIC
 # ==========================================
 @Client.on_callback_query(filters.regex(r"^idx_"))
 async def index_process_handler(bot: Client, query: CallbackQuery):
     user_id = query.from_user.id
     data = query.data
 
-    # --- Cancel Logic ---
     if data == "idx_cancel":
         if user_id in INDEX_SESSION: del INDEX_SESSION[user_id]
         await query.message.edit("❌ Process Cancelled.")
         return
 
-    # --- Session Check ---
     if user_id not in INDEX_SESSION:
         return await query.answer("⚠️ Session Expired. Dobara /index karein.", show_alert=True)
 
-    # Variables Load
+    # Load Variables
     session = INDEX_SESSION[user_id]
     chat_id = session['channel_id']
     last_msg_id = session['last_msg_id']
     current_id = session['skip'] + 1
     
-    # Session Clean (Taaki naye command ke liye ready rahe)
-    del INDEX_SESSION[user_id]
+    del INDEX_SESSION[user_id] # Clear session to free memory
 
     msg = await query.message.edit("⏳ **Initializing Indexing...**")
 
-    # Stats Variables
+    # Stats
     total_scanned = 0
     indexed_files = 0
     duplicate_files = 0
     deleted_msgs = 0
     
-    CHUNK_SIZE = 200 # Ek baar me 200 messages (Telegram Limit)
+    CHUNK_SIZE = 200 
 
     try:
         while current_id <= last_msg_id:
-            # Calculate batch range
             end_id = min(current_id + CHUNK_SIZE - 1, last_msg_id)
             ids_to_fetch = list(range(current_id, end_id + 1))
             
             if not ids_to_fetch: break
 
             try:
-                # 🚀 Fetch Messages (FloodWait Handled)
                 messages = await bot.get_messages(chat_id, ids_to_fetch)
             except FloodWait as e:
-                # Agar Telegram mana kare, to wait karo
-                await asyncio.sleep(e.value + 2) 
+                await asyncio.sleep(e.value + 2)
                 messages = await bot.get_messages(chat_id, ids_to_fetch)
             except Exception as e:
-                # Agar koi aur error aaye to skip this chunk
                 print(f"Fetch Error: {e}")
                 current_id += CHUNK_SIZE
                 continue
 
-            # Process Messages
             for m in messages:
                 total_scanned += 1
                 
-                # Check 1: Message Empty/Deleted
                 if not m or m.empty:
                     deleted_msgs += 1
                     continue
                 
-                # Check 2: Valid Media (Doc/Video/Audio)
+                # Check Media
                 if m.document or m.video or m.audio:
                     try:
-                        # Calls ia_filterdb.save_file -> which calls utils.get_file_details safely
+                        # ⚠️ IMPORTANT: Ye call ia_filterdb.py ke save_file ko jata hai
                         is_saved = await db.save_file(m)
                         if is_saved:
                             indexed_files += 1
@@ -173,10 +171,9 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
                     except Exception as e:
                         print(f"Save Error: {e}")
                 else:
-                    # Text/Photo/Sticker
                     deleted_msgs += 1
 
-            # 📊 Update Status (Har chunk ke baad)
+            # Update Status
             try:
                 await msg.edit(
                     f"🔄 **Indexing in Progress...**\n\n"
@@ -188,20 +185,18 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
             except FloodWait as e:
                 await asyncio.sleep(e.value)
             except MessageNotModified:
-                pass # Agar status same hai to error ignore karo
+                pass
             except Exception:
                 pass 
 
-            # Move to next chunk
             current_id += CHUNK_SIZE
 
-        # ✅ FINAL SUMMARY
+        # Final Message
         await msg.edit(
-            f"✅ **Indexing Completed Successfully!**\n\n"
-            f"📊 **Total Scanned:** `{total_scanned}`\n"
-            f"💾 **New Files Saved:** `{indexed_files}`\n"
-            f"♻️ **Already in DB:** `{duplicate_files}`\n"
-            f"🗑 **Skipped (Empty/Text):** `{deleted_msgs}`"
+            f"✅ **Indexing Completed!**\n\n"
+            f"📊 **Scanned:** `{total_scanned}`\n"
+            f"💾 **Saved:** `{indexed_files}`\n"
+            f"♻️ **Duplicates:** `{duplicate_files}`"
         )
 
     except Exception as e:
