@@ -13,13 +13,15 @@ from utils import btn_parser
 # 1. TEXT HANDLERS (Group & PM)
 # ==========================================
 
-# Handler for GROUPS (Silent if no result)
-@Client.on_message(filters.text & filters.group)
+# Handler for GROUPS (Ignore commands)
+# FIX: '~filters.command' lagaya hai taaki ye /start, /help etc ko ignore kare
+@Client.on_message(filters.text & filters.group & ~filters.command)
 async def auto_filter_group(client: Client, message: Message):
     await process_search(client, message, is_pm=False)
 
-# Handler for PM/PRIVATE (Reply "No Found" if no result)
-@Client.on_message(filters.text & filters.private)
+# Handler for PM/PRIVATE (Ignore commands)
+# FIX: Yahan bhi '~filters.command' zaroori hai
+@Client.on_message(filters.text & filters.private & ~filters.command)
 async def auto_filter_pm(client: Client, message: Message):
     await process_search(client, message, is_pm=True)
 
