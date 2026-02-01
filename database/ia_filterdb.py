@@ -2,7 +2,7 @@ import logging
 import re
 from motor.motor_asyncio import AsyncIOMotorClient
 from info import MONGO_URI, DATABASE_NAME, COLLECTION_NAME
-# 👇 Zaroori: Utils se functions import kar rahe hain
+# 👇 YE IMPORT BOHOT ZAROORI HAI
 from utils import get_file_details, generate_link_id, LANG_PATTERNS, QUAL_PATTERNS
 
 logger = logging.getLogger(__name__)
@@ -15,22 +15,23 @@ class Media:
         self.temp_col = self.db["temp_searches"]
         self.seq_col = self.db["sequences"]
 
-    # --- INDEXES ---
+    # --- 1. INDEXES ---
     async def ensure_indexes(self):
         try:
             await self.col.create_index("file_unique_id", unique=True)
             await self.col.create_index("link_id")
             await self.col.create_index([("file_name", "text")])
             await self.temp_col.create_index("created_at", expireAfterSeconds=172800)
-            logger.info("✅ Indexes Ready")
-        except: pass
+            logger.info("✅ Database Indexes Ready")
+        except Exception as e:
+            logger.error(f"❌ Index Error: {e}")
 
-    # --- SEARCH LOGIC (Hybrid: Atlas + Regex) ---
+    # --- 2. SEARCH (Hybrid: Atlas + Regex) ---
     async def get_search_results(self, query, file_type=None, lang=None, quality=None, year=None, size_key=None, offset=0, limit=10):
-        # 1. Atlas Search (Fuzzy)
+        # Method A: Atlas Search (Fuzzy/Spelling)
         pipeline = [{"$search": {"index": "default", "text": {"query": query, "path": "file_name", "fuzzy": {"maxEdits": 2}}}}]
         
-        # 2. Filters
+        # Filters apply karein
         match = {}
         if file_type and file_type != "None": match["file_type"] = file_type
         
@@ -45,7 +46,8 @@ class Media:
             pat = LANG_PATTERNS.get(lang.capitalize())
             if pat: and_cond.append({"$or": [{"file_name": {"$regex": pat}}, {"caption": {"$regex": pat}}]})
         if quality and quality != "None":
-            pat = QUAL_PATTERNS.get(quality, re.compile(rf'\b{quality}\b', re.IGNORECASE))
+            if quality in QUAL_PATTERNS: pat = QUAL_PATTERNS[quality]
+            else: pat = re.compile(rf'\b{quality}\b', re.IGNORECASE)
             and_cond.append({"file_name": {"$regex": pat}})
         if year and year != "None":
             and_cond.append({"file_name": {"$regex": re.compile(rf'\b{year}\b')}})
@@ -59,20 +61,20 @@ class Media:
             cursor = self.col.aggregate(pipeline)
             return await cursor.to_list(length=limit)
         except:
-            # Fallback to Regex if Atlas fails
+            # Method B: Regex Search (Backup)
             return await self.get_search_results_fallback(query, file_type, lang, quality, year, size_key, offset, limit)
 
     async def get_search_results_fallback(self, query, file_type, lang, quality, year, size_key, offset, limit):
         regex = "".join(f"(?=.*{re.escape(w)})" for w in query.split())
         mongo_query = {"file_name": {"$regex": regex, "$options": "i"}}
         if file_type and file_type != "None": mongo_query["file_type"] = file_type
-        # (Baaki filters short me, full logic upar hai)
+        # (Filters same as above, shortened for brevity)
         cursor = self.col.find(mongo_query)
         cursor.sort('_id', -1)
         cursor.skip(offset).limit(limit)
         return await cursor.to_list(length=limit)
 
-    # --- YEAR DETECTION ---
+    # --- 3. YEAR DETECTION ---
     async def get_unique_years(self, query):
         try:
             pipeline = [{"$match": {"file_name": {"$regex": query, "$options": "i"}}}, {"$limit": 50}, {"$project": {"file_name": 1}}]
@@ -84,7 +86,7 @@ class Media:
             return sorted(list(years), reverse=True)
         except: return []
 
-    # --- SAVE FILE (CRASH FIXED) ---
+    # --- 4. SAVE FILE (CRASH SAFE) ---
     async def save_file(self, message):
         try:
             file_info = get_file_details(message)
@@ -108,10 +110,10 @@ class Media:
             await self.col.insert_one(doc)
             return True
         except Exception as e:
-            logger.error(f"Save Error: {e}")
+            logger.error(f"Error Saving File: {e}")
             return False
 
-    # --- UTILS ---
+    # --- 5. UTILS ---
     async def get_next_sequence(self):
         doc = await self.seq_col.find_one_and_update({"_id": "search_id"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True)
         return doc["seq"]
