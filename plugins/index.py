@@ -5,11 +5,11 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from info import ADMINS
 from database.ia_filterdb import db
 
-# Session Storage to track steps
+# Session Storage to track user steps
 INDEX_SESSION = {}
 
 # ==========================================
-# STEP 1: INITIAL COMMAND
+# STEP 1: INITIAL COMMAND (/index)
 # ==========================================
 @Client.on_message(filters.command("index") & filters.user(ADMINS))
 async def start_index_step1(bot: Client, message: Message):
@@ -118,7 +118,7 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
     last_msg_id = session['last_msg_id']
     current_id = session['skip'] + 1
     
-    # Session Clean
+    # Session Clean (Taaki naye command ke liye ready rahe)
     del INDEX_SESSION[user_id]
 
     msg = await query.message.edit("⏳ **Initializing Indexing...**")
@@ -129,7 +129,7 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
     duplicate_files = 0
     deleted_msgs = 0
     
-    CHUNK_SIZE = 200 # Batch size
+    CHUNK_SIZE = 200 # Ek baar me 200 messages (Telegram Limit)
 
     try:
         while current_id <= last_msg_id:
@@ -143,10 +143,11 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
                 # 🚀 Fetch Messages (FloodWait Handled)
                 messages = await bot.get_messages(chat_id, ids_to_fetch)
             except FloodWait as e:
-                await asyncio.sleep(e.value + 2) # Wait extra 2s safety
+                # Agar Telegram mana kare, to wait karo
+                await asyncio.sleep(e.value + 2) 
                 messages = await bot.get_messages(chat_id, ids_to_fetch)
             except Exception as e:
-                # Agar critical error aaye to skip this chunk
+                # Agar koi aur error aaye to skip this chunk
                 print(f"Fetch Error: {e}")
                 current_id += CHUNK_SIZE
                 continue
@@ -160,10 +161,10 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
                     deleted_msgs += 1
                     continue
                 
-                # Check 2: Valid Media
+                # Check 2: Valid Media (Doc/Video/Audio)
                 if m.document or m.video or m.audio:
                     try:
-                        # Calls ia_filterdb.save_file -> calls utils.get_file_details
+                        # Calls ia_filterdb.save_file -> which calls utils.get_file_details safely
                         is_saved = await db.save_file(m)
                         if is_saved:
                             indexed_files += 1
@@ -175,7 +176,7 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
                     # Text/Photo/Sticker
                     deleted_msgs += 1
 
-            # 📊 Update Status (Every chunk)
+            # 📊 Update Status (Har chunk ke baad)
             try:
                 await msg.edit(
                     f"🔄 **Indexing in Progress...**\n\n"
@@ -187,9 +188,9 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
             except FloodWait as e:
                 await asyncio.sleep(e.value)
             except MessageNotModified:
-                pass
+                pass # Agar status same hai to error ignore karo
             except Exception:
-                pass # Edit fail hone par process na ruke
+                pass 
 
             # Move to next chunk
             current_id += CHUNK_SIZE
