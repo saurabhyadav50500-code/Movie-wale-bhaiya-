@@ -13,22 +13,21 @@ from utils import btn_parser
 # 1. TEXT HANDLERS (Group & PM)
 # ==========================================
 
-# Handler for GROUPS (Ignore commands)
-# FIX: '~filters.command' lagaya hai taaki ye /start, /help etc ko ignore kare
-@Client.on_message(filters.text & filters.group & ~filters.command)
+# Handler for GROUPS (Ignore messages starting with /)
+# FIX: ~filters.regex(r"^/") ka matlab hai jo message '/' se shuru na ho wahi pakdo
+@Client.on_message(filters.text & filters.group & ~filters.regex(r"^/"))
 async def auto_filter_group(client: Client, message: Message):
     await process_search(client, message, is_pm=False)
 
-# Handler for PM/PRIVATE (Ignore commands)
-# FIX: Yahan bhi '~filters.command' zaroori hai
-@Client.on_message(filters.text & filters.private & ~filters.command)
+# Handler for PM/PRIVATE (Ignore messages starting with /)
+@Client.on_message(filters.text & filters.private & ~filters.regex(r"^/"))
 async def auto_filter_pm(client: Client, message: Message):
     await process_search(client, message, is_pm=True)
 
 # Common Search Function
 async def process_search(client, message, is_pm):
     query = message.text
-    # Basic validation
+    # Basic validation (Double Check)
     if not query or len(query) < 2 or query.startswith("/"): return
     if not client.me: await client.get_me()
 
