@@ -28,15 +28,15 @@ async def handle_forward_step2(bot: Client, message: Message):
     })
     await message.reply_text(f"✅ **Channel Detected:** {message.forward_from_chat.title}\n**Step 2:** Skip number likhein (Ex: 0).")
 
-# STEP 3
+# STEP 3 (Isme Restart Check hai)
 @Client.on_message(filters.text & filters.user(ADMINS) & ~filters.command(["index", "start"]))
 async def handle_skip_step3(bot: Client, message: Message):
     user_id = message.from_user.id
     
-    # 🔴 Restart Check
+    # 🔴 AGAR BOT RESTART HUA HAI TO BATAO
     if user_id not in INDEX_SESSION:
         if message.text.isdigit():
-            await message.reply("⚠️ **Bot Restart Ho Gaya Tha!**\nSession expire ho gaya. `/index` dubara karein.")
+            await message.reply("⚠️ **Alert: Bot Restart Ho Gaya Tha!**\nSession expire ho gaya. Kripya `/index` dubara shuru karein.")
         return
 
     if INDEX_SESSION[user_id]['step'] != 'waiting_skip': return
@@ -52,7 +52,7 @@ async def handle_skip_step3(bot: Client, message: Message):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Start", callback_data="idx_start"), InlineKeyboardButton("❌ Cancel", callback_data="idx_cancel")]])
     )
 
-# STEP 4 (Process)
+# STEP 4 (Processing)
 @Client.on_callback_query(filters.regex(r"^idx_"))
 async def index_process_handler(bot: Client, query: CallbackQuery):
     user_id = query.from_user.id
@@ -60,14 +60,14 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
         if user_id in INDEX_SESSION: del INDEX_SESSION[user_id]
         return await query.message.edit("❌ Cancelled.")
 
-    if user_id not in INDEX_SESSION: return await query.answer("⚠️ Expired.", show_alert=True)
+    if user_id not in INDEX_SESSION: return await query.answer("⚠️ Session Expired.", show_alert=True)
 
     session = INDEX_SESSION[user_id]
     del INDEX_SESSION[user_id]
     
     msg = await query.message.edit("⏳ **Initializing...**")
     chat_id, last_id, current = session['channel_id'], session['last_msg_id'], session['skip'] + 1
-    total, saved, dupes, skip = 0, 0, 0, 0
+    total, saved, dupes = 0, 0, 0
     
     try:
         while current <= last_id:
@@ -87,9 +87,8 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
                         if await db.save_file(m): saved += 1
                         else: dupes += 1
                     except: pass
-                else: skip += 1
-
-            try: await msg.edit(f"🔄 **Indexing...**\nScanned: {total}\nSaved: {saved}\nDupes: {dupes}")
+            
+            try: await msg.edit(f"🔄 **Indexing...**\nScanned: {total}\nSaved: {saved}")
             except: pass
             current += 200
 
