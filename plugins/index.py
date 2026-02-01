@@ -5,7 +5,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from info import ADMINS
 from database.ia_filterdb import db
 
-# Temporary dictionary to store user session steps
+# Session Storage to track steps
 INDEX_SESSION = {}
 
 # ==========================================
@@ -31,6 +31,7 @@ async def handle_forward_step2(bot: Client, message: Message):
     """Forwarded message se Channel ID aur Message ID nikalta hai."""
     user_id = message.from_user.id
     
+    # Check if user is in session
     if user_id not in INDEX_SESSION or INDEX_SESSION[user_id]['step'] != 'waiting_forward':
         return
 
@@ -68,7 +69,7 @@ async def handle_skip_step3(bot: Client, message: Message):
     try:
         skip_num = int(message.text)
     except ValueError:
-        return await message.reply("❌ Kripya number likhein (Ex: 0).")
+        return await message.reply("❌ Kripya valid number likhein (Ex: 0).")
 
     session = INDEX_SESSION[user_id]
     session['skip'] = skip_num
@@ -94,7 +95,7 @@ async def handle_skip_step3(bot: Client, message: Message):
     )
 
 # ==========================================
-# STEP 4: CORE INDEXING LOGIC (UPDATED)
+# STEP 4: CORE INDEXING LOGIC (OPTIMIZED)
 # ==========================================
 @Client.on_callback_query(filters.regex(r"^idx_"))
 async def index_process_handler(bot: Client, query: CallbackQuery):
@@ -128,66 +129,72 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
     duplicate_files = 0
     deleted_msgs = 0
     
-    CHUNK_SIZE = 200 # Ek baar me kitne message fetch honge
+    CHUNK_SIZE = 200 # Batch size
 
     try:
         while current_id <= last_msg_id:
+            # Calculate batch range
             end_id = min(current_id + CHUNK_SIZE - 1, last_msg_id)
             ids_to_fetch = list(range(current_id, end_id + 1))
             
             if not ids_to_fetch: break
 
             try:
-                # 🚀 Telegram se Messages maango (FloodWait Safe)
+                # 🚀 Fetch Messages (FloodWait Handled)
                 messages = await bot.get_messages(chat_id, ids_to_fetch)
             except FloodWait as e:
-                await asyncio.sleep(e.value + 1)
-                continue # Retry same chunk
+                await asyncio.sleep(e.value + 2) # Wait extra 2s safety
+                messages = await bot.get_messages(chat_id, ids_to_fetch)
             except Exception as e:
-                await msg.edit(f"❌ Error fetching messages: {e}")
-                return
+                # Agar critical error aaye to skip this chunk
+                print(f"Fetch Error: {e}")
+                current_id += CHUNK_SIZE
+                continue
 
-            # Messages Process Karo
+            # Process Messages
             for m in messages:
                 total_scanned += 1
                 
-                # Case 1: Message Delete ho chuka hai (None)
+                # Check 1: Message Empty/Deleted
                 if not m or m.empty:
                     deleted_msgs += 1
                     continue
                 
-                # Case 2: Media Check (Document/Video/Audio)
+                # Check 2: Valid Media
                 if m.document or m.video or m.audio:
                     try:
+                        # Calls ia_filterdb.save_file -> calls utils.get_file_details
                         is_saved = await db.save_file(m)
                         if is_saved:
                             indexed_files += 1
                         else:
                             duplicate_files += 1
                     except Exception as e:
-                        print(f"Skipping Error: {e}")
+                        print(f"Save Error: {e}")
                 else:
-                    # Photo/Text etc.
-                    pass
+                    # Text/Photo/Sticker
+                    deleted_msgs += 1
 
-            # 📊 Update Status (Har 200 messages par edit karein)
+            # 📊 Update Status (Every chunk)
             try:
                 await msg.edit(
                     f"🔄 **Indexing in Progress...**\n\n"
                     f"🔢 **Scanned:** `{total_scanned}` / `{last_msg_id}`\n"
                     f"💾 **Saved:** `{indexed_files}`\n"
                     f"♻️ **Duplicates:** `{duplicate_files}`\n"
-                    f"🗑 **Deleted/Empty:** `{deleted_msgs}`"
+                    f"🗑 **Skipped:** `{deleted_msgs}`"
                 )
-            except MessageNotModified:
-                pass
             except FloodWait as e:
                 await asyncio.sleep(e.value)
+            except MessageNotModified:
+                pass
+            except Exception:
+                pass # Edit fail hone par process na ruke
 
             # Move to next chunk
             current_id += CHUNK_SIZE
 
-        # ✅ FINAL MESSAGE
+        # ✅ FINAL SUMMARY
         await msg.edit(
             f"✅ **Indexing Completed Successfully!**\n\n"
             f"📊 **Total Scanned:** `{total_scanned}`\n"
