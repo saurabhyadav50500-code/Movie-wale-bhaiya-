@@ -4,7 +4,9 @@ import secrets
 import string
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# --- REGEX PATTERNS ---
+# ==========================================
+# 1. REGEX PATTERNS (Search Filters)
+# ==========================================
 LANG_PATTERNS = {
     "Hindi": re.compile(r'\b(hindi|hin|dub|dual)\b', re.IGNORECASE),
     "English": re.compile(r'\b(english|eng)\b', re.IGNORECASE),
@@ -19,7 +21,9 @@ QUAL_PATTERNS = {
     "4k": re.compile(r'\b(2160p|4k|uhd)\b', re.IGNORECASE),
 }
 
-# --- HELPER FUNCTIONS ---
+# ==========================================
+# 2. HELPER FUNCTIONS (File Info)
+# ==========================================
 def get_file_details(message):
     media = message.document or message.video or message.audio
     if not media: return None
@@ -45,14 +49,16 @@ def generate_link_id(length=8):
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
-# --- BUTTON PARSER ---
+# ==========================================
+# 3. BUTTON PARSER (Buttons Layout)
+# ==========================================
 async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None, a_qual=None, a_year=None, a_size=None, years=None):
     buttons = []
     bot_username = client.me.username if client.me else "Bot"
     
-    # 1. FILE RESULTS
+    # --- ROW 1: FILE RESULTS ---
     if not files:
-         buttons.append([InlineKeyboardButton("🤷‍♂️ No results with these filters", callback_data="none")])
+         buttons.append([InlineKeyboardButton("🤷‍♂️ No results found", callback_data="none")])
     else:
         for file in files:
             f_name = file['file_name']
@@ -64,7 +70,7 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
     def s(val): return val if val else "None"
     base = f"filter_{search_id}_0"
 
-    # 2. TYPE BUTTONS
+    # --- ROW 2: TYPE FILTERS ---
     type_row = []
     for t in ["video", "document"]:
         label = "📹 Videos" if t == "video" else "📂 Docs"
@@ -79,7 +85,7 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
          type_row.append(InlineKeyboardButton("🔄 Reset", callback_data=f"{base}_None_None_None_None_None"))
     buttons.append(type_row)
 
-    # 3. LANGUAGE & QUALITY
+    # --- ROW 3: LANGUAGE & QUALITY ---
     lq_row = []
     for lang in ["Hindi", "English"]:
         l_code = lang.lower()
@@ -94,7 +100,7 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
         lq_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{n_q}_{s(a_year)}_{s(a_size)}"))
     buttons.append(lq_row)
 
-    # 4. YEARS & SIZE
+    # --- ROW 4: YEARS & SIZE ---
     ys_row = []
     available_years = years if years else []
     for year in available_years[:2]:
@@ -109,7 +115,7 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
         ys_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{n_s}"))
     buttons.append(ys_row)
 
-    # 5. PAGINATION
+    # --- ROW 5: PAGINATION ---
     nav = []
     cb_state = f"{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}"
     if offset >= 10:
