@@ -43,8 +43,8 @@ app = Client(
 )
 
 async def start_bot():
-    print("-----------------------------------------")
-    print("🚀 Bot Start Ho Raha Hai...")
+    print("-----------------------------------------", flush=True)
+    print("🚀 Bot Start Ho Raha Hai...", flush=True)
     
     # Webserver start
     t = threading.Thread(target=run_web_server)
@@ -53,36 +53,51 @@ async def start_bot():
     
     try:
         await app.start()
-        print("✅ Telegram Se Connect Ho Gaya!")
+        print("✅ Telegram Se Connect Ho Gaya!", flush=True)
+        
+        # --- FIX: Purana Webhook Delete Karein ---
+        # Agar bot reply nahi kar raha, to ye line magic ki tarah kaam karegi
+        print("🧹 Checking/Clearing Webhooks...", flush=True)
+        await app.delete_webhook()
+        print("✅ Webhook Cleared! Polling ab sahi chalegi.", flush=True)
+
     except Exception as e:
-        print(f"❌ Connection Error: {e}")
+        print(f"❌ Connection Error: {e}", flush=True)
         return
 
-    # --- MAIN FIX: Checking DB with Safety ---
-    print("⏳ Database Connecting...")
+    # --- DATABASE CONNECTION (Safe Mode) ---
+    print("⏳ Database Connecting...", flush=True)
     try:
         # Pehle Main DB check karein
-        await db.ensure_indexes()
-        print("✅ Main Database Ready!")
+        # 10 Second ka timeout diya hai taaki bot atke nahi
+        await asyncio.wait_for(db.ensure_indexes(), timeout=10.0)
+        print("✅ Main Database Ready!", flush=True)
         
-        # Analytics ko try karein, agar atke to error dekar aage badh jaye
+        # Analytics ko try karein
         try:
             await asyncio.wait_for(analytics.ensure_indexes(), timeout=5.0)
-            print("✅ Analytics Database Ready!")
+            print("✅ Analytics Database Ready!", flush=True)
         except asyncio.TimeoutError:
-            print("⚠️ Analytics Slow tha, Skip kar diya (Bot chalega!)")
+            print("⚠️ Analytics Slow tha, Skip kar diya (Bot chalega!)", flush=True)
         except Exception as e:
-            print(f"⚠️ Analytics Error: {e}")
+            print(f"⚠️ Analytics Error: {e}", flush=True)
             
     except Exception as e:
-        print(f"❌ Main Database Error: {e}")
+        print(f"❌ Main Database Error: {e}", flush=True)
+        print("⚠️ Bot bina DB ke start ho raha hai (Search kaam nahi karega)", flush=True)
 
     # --- CONFIRMATION ---
     me = await app.get_me()
-    print(f"🤖 Bot Started as: @{me.username}")
-    print(f"📂 Plugins Loaded: {len(app.plugins) if app.plugins else 'Checking...'}")
-    print("➡️ Ab Telegram par /start bhejo!")
-    print("-----------------------------------------")
+    print(f"🤖 Bot Started as: @{me.username}", flush=True)
+    
+    # Plugins Check
+    if os.path.exists("plugins"):
+        print(f"📂 Plugins Folder Detected.", flush=True)
+    else:
+        print(f"❌ WARNING: 'plugins' folder nahi mila! Naam check karein.", flush=True)
+
+    print("➡️ Ab Telegram par /start bhejo!", flush=True)
+    print("-----------------------------------------", flush=True)
     
     await idle()
     await app.stop()
