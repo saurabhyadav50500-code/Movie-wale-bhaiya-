@@ -8,8 +8,8 @@ from info import ADMINS
 logger = logging.getLogger(__name__)
 
 # ==================================================================
-# 👇 MAINE YE MAST PHOTO LAGA DI HAI 👇
-START_IMG = "https://graph.org/file/4b5258d4a974b7c1266a1.jpg"
+# 👇 IS BAAR EK RELIABLE HD LINK DALA HAI (Cinema Theme) 👇
+START_IMG = "https://images.unsplash.com/photo-1626814026160-2237a95fc5a0?q=80&w=1080&auto=format&fit=crop"
 # ==================================================================
 
 @Client.on_message(filters.command("start") & filters.private)
@@ -33,7 +33,7 @@ async def start_handler(client, message):
         [InlineKeyboardButton("ℹ️ About", callback_data="about_section"), InlineKeyboardButton("📉 Status", callback_data="stats_callback")]
     ])
 
-    # 3. Welcome Text (Wahi Mast Wala)
+    # 3. Welcome Text
     welcome_text = (
         f"**Hello {first_name}!** 👋\n\n"
         f"Main Movies Search Bot hoon. 🎬\n"
@@ -41,7 +41,6 @@ async def start_handler(client, message):
     )
 
     # --- ADMIN PEHCHAN (BOSS LOGIC) ---
-    # Agar message bhejne wala Admin/Owner hai, to extra line add karo
     if user_id in ADMINS:
         welcome_text += "\n\n👑 **Welcome Boss!** Aap Admin hain. Aap `/index`, `/stats`, `/broadcast` jaise commands use kar sakte hain."
 
@@ -49,35 +48,74 @@ async def start_handler(client, message):
     try:
         await client.send_photo(
             chat_id=message.chat.id,
-            photo=START_IMG,           # Meri pasand ki photo
-            caption=welcome_text,      # Aapka pasandeeda text
+            photo=START_IMG,
+            caption=welcome_text,
             reply_markup=buttons,
             reply_to_message_id=message.id
         )
     except Exception as e:
+        # Agar photo ab bhi fail hui, to logs me error dikhega
         print(f"❌ Message Send Error: {e}", flush=True)
-        # Agar photo load na ho paye, to kam se kam text bhej dega
+        # Fallback to text
         await message.reply_text(welcome_text, reply_markup=buttons)
 
 
 # --- CALLBACKS (About & Status) ---
+# Note: Photo message edit karne ke liye 'edit_caption' use hota hai
 @Client.on_callback_query(filters.regex("about_section"))
 async def about_callback(client, callback):
     await callback.answer()
-    await callback.message.edit_caption(
-        caption=(
-            "ℹ️ **About Me**\n\n"
-            "Main ek Advanced Auto-Filter Bot hoon.\n"
-            "Mera kaam hai Groups/Channel se files index karna aur user ko dena.\n\n"
-            "Developed with ❤️ by You."
-        ),
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="recheck_menu")]])
-    )
+    try:
+        await callback.message.edit_caption(
+            caption=(
+                "ℹ️ **About Me**\n\n"
+                "Main ek Advanced Auto-Filter Bot hoon.\n"
+                "Mera kaam hai Groups/Channel se files index karna aur user ko dena.\n\n"
+                "Developed with ❤️ by You."
+            ),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="recheck_menu")]])
+        )
+    except:
+        # Agar photo nahi thi (text msg tha), to normal edit karo
+        await callback.message.edit_text(
+            "ℹ️ **About Me**\n\nText Mode...",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="recheck_menu")]])
+        )
 
 @Client.on_callback_query(filters.regex("stats_callback"))
 async def stats_callback(client, callback):
     await callback.answer()
-    await callback.message.edit_caption(
-        caption="📉 **Bot Status**\n\nBot is Running Smoothly! ✅",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="recheck_menu")]])
+    try:
+        await callback.message.edit_caption(
+            caption="📉 **Bot Status**\n\nBot is Running Smoothly! ✅",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="recheck_menu")]])
+        )
+    except:
+        await callback.message.edit_text(
+            "📉 **Bot Status**\n\nBot is Running Smoothly! ✅",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="recheck_menu")]])
+        )
+
+@Client.on_callback_query(filters.regex("recheck_menu"))
+async def home_callback(client, callback):
+    await callback.answer()
+    first_name = callback.from_user.first_name
+    
+    # Wapas original Menu Text
+    text = (
+        f"**Hello {first_name}!** 👋\n\n"
+        f"Main Movies Search Bot hoon. 🎬\n"
+        f"Koi bhi Movie/Series ka naam likh kar bhejo, main file dhoond dunga."
     )
+    if callback.from_user.id in ADMINS:
+        text += "\n\n👑 **Welcome Boss!** Aap Admin hain."
+
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add me to your Group", url=f"http://t.me/{client.me.username}?startgroup=true")],
+        [InlineKeyboardButton("ℹ️ About", callback_data="about_section"), InlineKeyboardButton("📉 Status", callback_data="stats_callback")]
+    ])
+    
+    try:
+        await callback.message.edit_caption(caption=text, reply_markup=buttons)
+    except:
+        await callback.message.edit_text(text=text, reply_markup=buttons)
