@@ -1,169 +1,268 @@
+import math
 import asyncio
+import re  # 👈 Cleaning ke liye
+import random
+import string
 from pyrogram import Client, filters
-from pyrogram.types import CallbackQuery, Message
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 from pyrogram.errors import MessageNotModified
-
-# Database & Utils Imports
 from database.ia_filterdb import db
 from database.analytics import analytics
-from database.users_chats_db import db_users
-from utils import btn_parser
+from utils import get_size
+
+# --- CONFIGURATION ---
+BUTTONS_PER_PAGE = 10
+
+# --- MEMORY STORAGE ---
+BUTTON_STORAGE = {} 
 
 # ==========================================
-# 1. TEXT HANDLERS (Group & PM)
+# 🧹 SMART FILE NAME CLEANER
 # ==========================================
+def clean_display_name(filename):
+    """
+    File name ko clean karta hai display ke liye.
+    Removes: @usernames, brackets, extensions, dots, underscores.
+    Keeps: Year, Resolution, Movie Name.
+    """
+    if not filename:
+        return "Unknown File"
 
-# Handler for GROUPS (Ignore messages starting with /)
-# FIX: ~filters.regex(r"^/") ka matlab hai jo message '/' se shuru na ho wahi pakdo
-@Client.on_message(filters.text & filters.group & ~filters.regex(r"^/"))
-async def auto_filter_group(client: Client, message: Message):
-    await process_search(client, message, is_pm=False)
+    # 1. Remove File Extension (.mkv, .mp4, etc.)
+    filename = re.sub(r'\.[a-z0-9]{2,5}$', '', filename, flags=re.IGNORECASE)
 
-# Handler for PM/PRIVATE (Ignore messages starting with /)
-@Client.on_message(filters.text & filters.private & ~filters.regex(r"^/"))
-async def auto_filter_pm(client: Client, message: Message):
-    await process_search(client, message, is_pm=True)
+    # 2. Remove Usernames (@tag, Tg:@tag)
+    filename = re.sub(r'@\w+', '', filename)
+    filename = re.sub(r'(?:Tg|Telegram):?@?\w+', '', filename, flags=re.IGNORECASE)
 
-# Common Search Function
-async def process_search(client, message, is_pm):
-    query = message.text
-    # Basic validation (Double Check)
-    if not query or len(query) < 2 or query.startswith("/"): return
-    if not client.me: await client.get_me()
+    # 3. Remove Links (http, www, .com)
+    filename = re.sub(r'(?:https?://|www\.)\S+', '', filename)
 
-    # Settings check (Group only)
-    if not is_pm:
-        await db_users.get_group_status(message.chat.id)
+    # 4. Replace Brackets, Pipes, Underscores, Dots with SPACE
+    # Hum content delete nahi kar rahe, bas symbols hata kar space de rahe hain
+    # Taaki "Movie.2024" ban jaye "Movie 2024"
+    filename = re.sub(r'[\[\]\(\)\|\_\.\-]', ' ', filename)
+
+    # 5. Fix Extra Spaces (Collapse multiple spaces to one)
+    filename = re.sub(r'\s+', ' ', filename).strip()
+
+    return filename
+
+
+# --- UTILS ---
+def get_search_id():
+    """Generates a short random ID (8 chars)"""
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+
+async def btn_parser(search_id: str, files: list, client: Client, offset: int = 0):
+    end_index = offset + BUTTONS_PER_PAGE
+    current_files = files[offset:end_index]
     
-    # Save Query for Analytics & ID
-    search_id = await db.save_search_query(query, message.from_user.id)
-    asyncio.create_task(analytics.log_search(message.text, query, 0, message.from_user.id, message.chat.id))
+    buttons = []
+    
+    # Username safe fetch
+    if client.me:
+        bot_username = client.me.username
+    else:
+        bot_username = "my_random_bot" # Fallback
 
-    if not search_id: 
-        if is_pm: await message.reply("❌ Database Error.")
+    for file in current_files:
+        f_id = file.get('link_id') 
+        raw_name = file.get('file_name', 'Unknown File')
+        f_size = get_size(file.get('file_size', 0))
+        
+        # 👇 CLEANING FUNCTION APPLIED HERE
+        # Button me dikhane ke liye naam saaf kiya ja raha hai
+        f_name = clean_display_name(raw_name)
+        
+        # Button text limit (Telegram limit ~64 chars)
+        if len(f_name) > 35:
+            f_name = f_name[:32] + "..."
+            
+        # URL Button for PM Redirect
+        buttons.append(
+            [InlineKeyboardButton(
+                text=f"📂 {f_name} | {f_size}",
+                url=f"https://t.me/{bot_username}?start=file_{f_id}"
+            )]
+        )
+
+    total_files = len(files)
+    total_pages = math.ceil(total_files / BUTTONS_PER_PAGE)
+    current_page = math.ceil(offset / BUTTONS_PER_PAGE) + 1
+    
+    nav_buttons = []
+
+    if offset >= BUTTONS_PER_PAGE:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="⬅️ Back",
+                callback_data=f"next_{search_id}_{offset - BUTTONS_PER_PAGE}"
+            )
+        )
+
+    nav_buttons.append(
+        InlineKeyboardButton(
+            text=f"Page {current_page}/{total_pages}",
+            callback_data="pages" 
+        )
+    )
+
+    if end_index < total_files:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="Next ➡️",
+                callback_data=f"next_{search_id}_{end_index}"
+            )
+        )
+
+    buttons.append(nav_buttons)
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="♻️ Close / Wrong Result",
+            callback_data=f"recheck_menu"
+        )
+    ])
+
+    return InlineKeyboardMarkup(buttons)
+
+
+# ==========================================
+# 1. MAIN SEARCH HANDLER (Group Text)
+# ==========================================
+@Client.on_message(filters.text & filters.group)
+async def auto_filter(client: Client, message: Message):
+    query = message.text
+    
+    if not query or len(query) < 2 or query.startswith("/"):
         return
 
-    # 🔎 Search in DB
+    if not client.me:
+        await client.get_me()
+
+    # Database Search
     files = await db.get_search_results(query)
-    years = await db.get_unique_years(query) # Fetch years for filter buttons
 
-    # Result Handling
+    # --- 📊 ANALYTICS LOGGING ---
+    if query:
+        asyncio.create_task(
+            analytics.log_search(
+                raw_query=message.text, 
+                cleaned_query=query, 
+                results_count=len(files), 
+                user_id=message.from_user.id, 
+                chat_id=message.chat.id
+            )
+        )
+
     if not files:
-        if is_pm:
-            # PM mein user ko batana zaroori hai
-            await message.reply_text(f"❌ **No Results Found for:** `{query}`\n\nKripya spelling check karein.")
-        return # Group mein silent rahenge
+        return 
 
-    # Generate Buttons
-    reply_markup = await btn_parser(search_id, files, client, 0, years=years)
+    # Generate Short ID for this search
+    search_id = get_search_id()
+    BUTTON_STORAGE[search_id] = query  # Map ID -> Real Query
+
+    # btn_parser ko ab ID pass karenge
+    reply_markup = await btn_parser(search_id, files, client, offset=0)
 
     await message.reply_text(
-        text=f"🔎 **Results for:** `{query}`\n👇 **Select Filters:**",
+        text=f"🔎 **Found {len(files)} results for:** `{query}`\n\n👇 **Click below to get file in PM:**",
         reply_markup=reply_markup,
-        quote=True if not is_pm else False
+        quote=True
     )
 
-# ==========================================
-# 2. CALLBACK HANDLER (Filters & Pagination)
-# ==========================================
-@Client.on_callback_query(filters.regex(r"^(next|filter)_"))
-async def filter_pagination_handler(client: Client, callback: CallbackQuery):
-    data = callback.data.split("_")
-    try:
-        # Data format: action_id_offset_type_lang_qual_year_size
-        search_id = int(data[1])
-        offset = int(data[2])
-        
-        # Helper to convert "None" string to None object
-        def c(v): return None if v == "None" else v
-        
-        # Safely parse 7 parameters
-        a_type = c(data[3]) if len(data) > 3 else None
-        a_lang = c(data[4]) if len(data) > 4 else None
-        a_qual = c(data[5]) if len(data) > 5 else None
-        a_year = c(data[6]) if len(data) > 6 else None
-        a_size = c(data[7]) if len(data) > 7 else None
 
-    except (IndexError, ValueError):
+# ==========================================
+# 2. PAGINATION HANDLER
+# ==========================================
+@Client.on_callback_query(filters.regex(r"^next_"))
+async def next_page_handler(client: Client, callback: CallbackQuery):
+    data = callback.data
+    
+    try:
+        # Data format: next_{search_id}_{offset}
+        _, search_id, str_offset = data.split("_", 2)
+        offset = int(str_offset)
+    except (ValueError, IndexError):
         return await callback.answer("❌ Error parsing data.", show_alert=True)
 
-    query = await db.get_search_query(search_id)
+    # Retrieve Real Query using ID
+    query = BUTTON_STORAGE.get(search_id)
+    
     if not query:
-        return await callback.answer("❌ Search Expired.", show_alert=True)
+        return await callback.answer("❌ Search expired. Please search again.", show_alert=True)
 
-    # Search with Filters
-    files = await db.get_search_results(
-        query, 
-        file_type=a_type, 
-        lang=a_lang, 
-        quality=a_qual, 
-        year=a_year, 
-        size_key=a_size, 
-        offset=offset
-    )
-    years = await db.get_unique_years(query) # Refresh years
-
+    files = await db.get_search_results(query)
     if not files:
-        if offset > 0:
-            return await callback.answer("⚠️ End of pages.", show_alert=True)
-        else:
-            await callback.answer("⚠️ No files found for this combo!", show_alert=False)
+        return await callback.answer("❌ No files found.", show_alert=True)
 
-    # Update Buttons
-    new_markup = await btn_parser(
-        search_id, files, client, offset, 
-        a_type, a_lang, a_qual, a_year, a_size, years=years
-    )
-    
-    # Status Text Update
-    status = []
-    if a_type: status.append(f"{a_type.title()}")
-    if a_lang: status.append(f"{a_lang.title()}")
-    if a_qual: status.append(f"{a_qual}")
-    if a_year: status.append(f"{a_year}")
-    if a_size: status.append(f"{a_size}")
-    
-    text = f"🔎 **Results for:** `{query}`"
-    if status: text += f"\n⚙️ **Active:** {', '.join(status)}"
+    if not client.me:
+        await client.get_me()
+
+    new_markup = await btn_parser(search_id, files, client, offset=offset)
 
     try:
-        await callback.edit_message_text(text=text, reply_markup=new_markup)
+        await callback.edit_message_reply_markup(reply_markup=new_markup)
     except MessageNotModified:
-        pass
+        pass 
+    except Exception as e:
+        print(f"Pagination Error: {e}")
+
 
 # ==========================================
-# 3. FILE DELIVERY (Start with File ID)
+# 3. FILE DELIVERY HANDLER (Priority High)
 # ==========================================
 @Client.on_message(filters.command("start") & filters.private, group=-1)
-async def file_delivery_handler(client, message):
-    if len(message.command) < 2 or not message.command[1].startswith("file_"): return
+async def file_delivery_handler(client: Client, message: Message):
+    """
+    Handles deep link delivery. High priority.
+    """
+    if len(message.command) < 2:
+        return
     
-    link_id = message.command[1].split("file_", 1)[1]
+    payload = message.command[1]
+    
+    if not payload.startswith("file_"):
+        return
+
+    try:
+        link_id = payload.split("file_", 1)[1]
+    except IndexError:
+        return await message.reply("❌ Invalid Link Format")
+
     file_info = await db.get_file_by_link_id(link_id)
     
-    if not file_info: 
+    if not file_info:
         return await message.reply("❌ File not found (Deleted or Invalid).")
-    
-    await db_users.add_user(message.from_user.id, message.from_user.first_name)
-    s_msg = await message.reply("📂 **Sending File...**")
-    
+
+    # 👇 Clean Name for Display Message
+    raw_name = file_info.get('file_name', 'Unknown File')
+    clean_name = clean_display_name(raw_name)
+
+    status_msg = await message.reply(f"📂 **Sending:** `{clean_name}`")
+
     try:
         await client.send_cached_media(
-            message.from_user.id, 
-            file_info['file_id'], 
-            caption=file_info['caption'] or ""
+            chat_id=message.from_user.id,
+            file_id=file_info['file_id'],
+            caption=file_info['caption'] or "",
         )
-        await s_msg.delete()
+        await status_msg.delete()
+    
     except Exception as e:
-        await s_msg.edit(f"❌ Error: {e}")
+        print(f"Error Sending File: {e}")
+        # Auto Delete Logic for Invalid Files
+        if "MEDIA_EMPTY" in str(e) or "400" in str(e):
+             await db.col.delete_one({"link_id": link_id})
+             await status_msg.edit("❌ **File Expired:** This file was deleted from Telegram servers.")
+        else:
+             await status_msg.edit(f"❌ Error sending file: {str(e)}")
+
 
 # ==========================================
-# 4. MISC HANDLERS (Pages, Close)
+# 4. CLOSE HANDLER
 # ==========================================
-@Client.on_callback_query(filters.regex("pages"))
-async def pages_handler(_, cb): 
-    await cb.answer("ℹ️ Current Page", show_alert=True)
-
-@Client.on_callback_query(filters.regex("recheck_menu"))
-async def close_handler(_, cb): 
-    await cb.message.delete()
+@Client.on_callback_query(filters.regex(r"^recheck_menu"))
+async def close_handler(client: Client, callback: CallbackQuery):
+    await callback.message.delete()
