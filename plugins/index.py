@@ -7,15 +7,15 @@ from database.ia_filterdb import db
 
 INDEX_SESSION = {}
 
-# STEP 1
-@Client.on_message(filters.command("index") & filters.user(ADMINS))
+# STEP 1: INITIAL COMMAND (Priority Group 1)
+@Client.on_message(filters.command("index") & filters.user(ADMINS), group=1)
 async def start_index_step1(bot: Client, message: Message):
     user_id = message.from_user.id
     INDEX_SESSION[user_id] = {'step': 'waiting_forward'}
     await message.reply_text("🆔 **Indexing Step 1:**\nApne Channel se **Last Message** forward karein.")
 
-# STEP 2
-@Client.on_message(filters.forwarded & filters.user(ADMINS))
+# STEP 2: HANDLE FORWARD
+@Client.on_message(filters.forwarded & filters.user(ADMINS), group=1)
 async def handle_forward_step2(bot: Client, message: Message):
     user_id = message.from_user.id
     if user_id not in INDEX_SESSION or INDEX_SESSION[user_id]['step'] != 'waiting_forward': return
@@ -28,15 +28,15 @@ async def handle_forward_step2(bot: Client, message: Message):
     })
     await message.reply_text(f"✅ **Channel Detected:** {message.forward_from_chat.title}\n**Step 2:** Skip number likhein (Ex: 0).")
 
-# STEP 3 (Isme Restart Check hai)
-@Client.on_message(filters.text & filters.user(ADMINS) & ~filters.command(["index", "start"]))
+# STEP 3: HANDLE SKIP NUMBER (Ye Fix Hai "0" ke liye)
+@Client.on_message(filters.text & filters.user(ADMINS) & ~filters.command(["index", "start"]), group=1)
 async def handle_skip_step3(bot: Client, message: Message):
     user_id = message.from_user.id
     
-    # 🔴 AGAR BOT RESTART HUA HAI TO BATAO
+    # Restart Check
     if user_id not in INDEX_SESSION:
         if message.text.isdigit():
-            await message.reply("⚠️ **Alert: Bot Restart Ho Gaya Tha!**\nSession expire ho gaya. Kripya `/index` dubara shuru karein.")
+            await message.reply("⚠️ **Bot Restart Ho Gaya Tha!**\nSession expire ho gaya. `/index` dubara karein.")
         return
 
     if INDEX_SESSION[user_id]['step'] != 'waiting_skip': return
@@ -52,8 +52,8 @@ async def handle_skip_step3(bot: Client, message: Message):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Start", callback_data="idx_start"), InlineKeyboardButton("❌ Cancel", callback_data="idx_cancel")]])
     )
 
-# STEP 4 (Processing)
-@Client.on_callback_query(filters.regex(r"^idx_"))
+# STEP 4: PROCESSING
+@Client.on_callback_query(filters.regex(r"^idx_"), group=1)
 async def index_process_handler(bot: Client, query: CallbackQuery):
     user_id = query.from_user.id
     if query.data == "idx_cancel":
@@ -88,7 +88,7 @@ async def index_process_handler(bot: Client, query: CallbackQuery):
                         else: dupes += 1
                     except: pass
             
-            try: await msg.edit(f"🔄 **Indexing...**\nScanned: {total}\nSaved: {saved}")
+            try: await msg.edit(f"🔄 **Indexing...**\nScanned: {total}\nSaved: {saved}\nDupes: {dupes}")
             except: pass
             current += 200
 
