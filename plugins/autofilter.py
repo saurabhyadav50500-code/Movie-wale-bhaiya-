@@ -1,127 +1,169 @@
-import re
-import math
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import asyncio
+from pyrogram import Client, filters
+from pyrogram.types import CallbackQuery, Message
+from pyrogram.errors import MessageNotModified
 
-# --- REGEX PATTERNS ---
-LANG_PATTERNS = {
-    "Hindi": re.compile(r'\b(hindi|hin|dub|dual)\b', re.IGNORECASE),
-    "English": re.compile(r'\b(english|eng)\b', re.IGNORECASE),
-    "Tamil": re.compile(r'\b(tamil|tam)\b', re.IGNORECASE),
-    "Telugu": re.compile(r'\b(telugu|tel)\b', re.IGNORECASE),
-}
-
-QUAL_PATTERNS = {
-    "480p": re.compile(r'\b(480p|480|sd)\b', re.IGNORECASE),
-    "720p": re.compile(r'\b(720p|720|hd)\b', re.IGNORECASE),
-    "1080p": re.compile(r'\b(1080p|1080|fhd)\b', re.IGNORECASE),
-    "4k": re.compile(r'\b(2160p|4k|uhd)\b', re.IGNORECASE),
-}
-
-# --- HELPER FUNCTIONS ---
-def get_file_details(message):
-    media = message.document or message.video or message.audio
-    if not media: return None
-    return {
-        'file_id': media.file_id,
-        'file_unique_id': media.file_unique_id,
-        'file_name': media.file_name or "Unknown",
-        'file_size': media.file_size,
-        'file_type': "video" if message.video else "audio" if message.audio else "document",
-        'mime_type': media.mime_type
-    }
-
-def get_size(size):
-    units = ["B", "KB", "MB", "GB", "TB"]
-    size = float(size)
-    i = 0
-    while size >= 1024.0 and i < len(units) - 1:
-        i += 1
-        size /= 1024.0
-    return "%.2f %s" % (size, units[i])
-
-def generate_link_id(length=8):
-    import secrets, string
-    alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
+# Database & Utils Imports
+from database.ia_filterdb import db
+from database.analytics import analytics
+from database.users_chats_db import db_users
+from utils import btn_parser
 
 # ==========================================
-# 🛠️ BUTTON PARSER
+# 1. TEXT HANDLERS (Group & PM)
 # ==========================================
-async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None, a_qual=None, a_year=None, a_size=None, years=None):
-    buttons = []
+
+# Handler for GROUPS (Ignore messages starting with /)
+# FIX: ~filters.regex(r"^/") ka matlab hai jo message '/' se shuru na ho wahi pakdo
+@Client.on_message(filters.text & filters.group & ~filters.regex(r"^/"))
+async def auto_filter_group(client: Client, message: Message):
+    await process_search(client, message, is_pm=False)
+
+# Handler for PM/PRIVATE (Ignore messages starting with /)
+@Client.on_message(filters.text & filters.private & ~filters.regex(r"^/"))
+async def auto_filter_pm(client: Client, message: Message):
+    await process_search(client, message, is_pm=True)
+
+# Common Search Function
+async def process_search(client, message, is_pm):
+    query = message.text
+    # Basic validation (Double Check)
+    if not query or len(query) < 2 or query.startswith("/"): return
+    if not client.me: await client.get_me()
+
+    # Settings check (Group only)
+    if not is_pm:
+        await db_users.get_group_status(message.chat.id)
     
-    # 1. FILE RESULTS
-    bot_username = client.me.username if client.me else "Bot"
+    # Save Query for Analytics & ID
+    search_id = await db.save_search_query(query, message.from_user.id)
+    asyncio.create_task(analytics.log_search(message.text, query, 0, message.from_user.id, message.chat.id))
+
+    if not search_id: 
+        if is_pm: await message.reply("❌ Database Error.")
+        return
+
+    # 🔎 Search in DB
+    files = await db.get_search_results(query)
+    years = await db.get_unique_years(query) # Fetch years for filter buttons
+
+    # Result Handling
     if not files:
-         buttons.append([InlineKeyboardButton("🤷‍♂️ No results with these filters", callback_data="none")])
-    else:
-        for file in files:
-            f_name = file['file_name']
-            f_size = get_size(file['file_size'])
-            f_link = f"https://t.me/{bot_username}?start=file_{file['link_id']}"
-            if len(f_name) > 30: f_name = f_name[:27] + "..."
-            buttons.append([InlineKeyboardButton(f"📂 {f_name} | {f_size}", url=f_link)])
+        if is_pm:
+            # PM mein user ko batana zaroori hai
+            await message.reply_text(f"❌ **No Results Found for:** `{query}`\n\nKripya spelling check karein.")
+        return # Group mein silent rahenge
 
-    def s(val): return val if val else "None"
-    base = f"filter_{search_id}_0"
+    # Generate Buttons
+    reply_markup = await btn_parser(search_id, files, client, 0, years=years)
 
-    # 2. TYPE
-    type_row = []
-    for t in ["video", "document"]:
-        label = "📹 Videos" if t == "video" else "📂 Docs"
-        if a_type == t:
-            label = f"✅ {label.split()[1]}"
-            new_val = "None"
+    await message.reply_text(
+        text=f"🔎 **Results for:** `{query}`\n👇 **Select Filters:**",
+        reply_markup=reply_markup,
+        quote=True if not is_pm else False
+    )
+
+# ==========================================
+# 2. CALLBACK HANDLER (Filters & Pagination)
+# ==========================================
+@Client.on_callback_query(filters.regex(r"^(next|filter)_"))
+async def filter_pagination_handler(client: Client, callback: CallbackQuery):
+    data = callback.data.split("_")
+    try:
+        # Data format: action_id_offset_type_lang_qual_year_size
+        search_id = int(data[1])
+        offset = int(data[2])
+        
+        # Helper to convert "None" string to None object
+        def c(v): return None if v == "None" else v
+        
+        # Safely parse 7 parameters
+        a_type = c(data[3]) if len(data) > 3 else None
+        a_lang = c(data[4]) if len(data) > 4 else None
+        a_qual = c(data[5]) if len(data) > 5 else None
+        a_year = c(data[6]) if len(data) > 6 else None
+        a_size = c(data[7]) if len(data) > 7 else None
+
+    except (IndexError, ValueError):
+        return await callback.answer("❌ Error parsing data.", show_alert=True)
+
+    query = await db.get_search_query(search_id)
+    if not query:
+        return await callback.answer("❌ Search Expired.", show_alert=True)
+
+    # Search with Filters
+    files = await db.get_search_results(
+        query, 
+        file_type=a_type, 
+        lang=a_lang, 
+        quality=a_qual, 
+        year=a_year, 
+        size_key=a_size, 
+        offset=offset
+    )
+    years = await db.get_unique_years(query) # Refresh years
+
+    if not files:
+        if offset > 0:
+            return await callback.answer("⚠️ End of pages.", show_alert=True)
         else:
-            new_val = t
-        type_row.append(InlineKeyboardButton(label, callback_data=f"{base}_{new_val}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}"))
-    
-    if any([a_type, a_lang, a_qual, a_year, a_size]):
-         type_row.append(InlineKeyboardButton("🔄 Reset", callback_data=f"{base}_None_None_None_None_None"))
-    buttons.append(type_row)
+            await callback.answer("⚠️ No files found for this combo!", show_alert=False)
 
-    # 3. LANG & QUAL
-    lq_row = []
-    for lang in ["Hindi", "English"]:
-        l_code = lang.lower()
-        txt = f"✅ {lang}" if a_lang == l_code else lang
-        n_l = "None" if a_lang == l_code else l_code
-        lq_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{n_l}_{s(a_qual)}_{s(a_year)}_{s(a_size)}"))
+    # Update Buttons
+    new_markup = await btn_parser(
+        search_id, files, client, offset, 
+        a_type, a_lang, a_qual, a_year, a_size, years=years
+    )
     
-    for qual in ["720p", "1080p"]:
-        q_code = qual.lower()
-        txt = f"✅ {qual}" if a_qual == q_code else qual
-        n_q = "None" if a_qual == q_code else q_code
-        lq_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{n_q}_{s(a_year)}_{s(a_size)}"))
-    buttons.append(lq_row)
-
-    # 4. YEARS & SIZE
-    ys_row = []
-    available_years = years if years else []
-    for year in available_years[:2]:
-        txt = f"✅ {year}" if a_year == year else year
-        n_y = "None" if a_year == year else year
-        ys_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{n_y}_{s(a_size)}"))
-
-    sizes = [("s", "<500MB"), ("l", "1GB+")]
-    for k, v in sizes:
-        txt = f"✅ {v}" if a_size == k else v
-        n_s = "None" if a_size == k else k
-        ys_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{n_s}"))
-    buttons.append(ys_row)
-
-    # 5. PAGINATION
-    nav = []
-    cb_state = f"{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}"
-    if offset >= 10:
-        nav.append(InlineKeyboardButton("⬅️ Back", callback_data=f"next_{search_id}_{offset-10}_{cb_state}"))
+    # Status Text Update
+    status = []
+    if a_type: status.append(f"{a_type.title()}")
+    if a_lang: status.append(f"{a_lang.title()}")
+    if a_qual: status.append(f"{a_qual}")
+    if a_year: status.append(f"{a_year}")
+    if a_size: status.append(f"{a_size}")
     
-    nav.append(InlineKeyboardButton(f"Page {math.ceil(offset/10)+1}", callback_data="pages"))
-    
-    if len(files) >= 10:
-        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"next_{search_id}_{offset+10}_{cb_state}"))
-    
-    buttons.append(nav)
-    buttons.append([InlineKeyboardButton("♻️ Close", callback_data="recheck_menu")])
+    text = f"🔎 **Results for:** `{query}`"
+    if status: text += f"\n⚙️ **Active:** {', '.join(status)}"
 
-    return InlineKeyboardMarkup(buttons)
+    try:
+        await callback.edit_message_text(text=text, reply_markup=new_markup)
+    except MessageNotModified:
+        pass
+
+# ==========================================
+# 3. FILE DELIVERY (Start with File ID)
+# ==========================================
+@Client.on_message(filters.command("start") & filters.private, group=-1)
+async def file_delivery_handler(client, message):
+    if len(message.command) < 2 or not message.command[1].startswith("file_"): return
+    
+    link_id = message.command[1].split("file_", 1)[1]
+    file_info = await db.get_file_by_link_id(link_id)
+    
+    if not file_info: 
+        return await message.reply("❌ File not found (Deleted or Invalid).")
+    
+    await db_users.add_user(message.from_user.id, message.from_user.first_name)
+    s_msg = await message.reply("📂 **Sending File...**")
+    
+    try:
+        await client.send_cached_media(
+            message.from_user.id, 
+            file_info['file_id'], 
+            caption=file_info['caption'] or ""
+        )
+        await s_msg.delete()
+    except Exception as e:
+        await s_msg.edit(f"❌ Error: {e}")
+
+# ==========================================
+# 4. MISC HANDLERS (Pages, Close)
+# ==========================================
+@Client.on_callback_query(filters.regex("pages"))
+async def pages_handler(_, cb): 
+    await cb.answer("ℹ️ Current Page", show_alert=True)
+
+@Client.on_callback_query(filters.regex("recheck_menu"))
+async def close_handler(_, cb): 
+    await cb.message.delete()
