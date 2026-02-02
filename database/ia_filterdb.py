@@ -23,7 +23,7 @@ class Media:
         except: pass
 
     # =====================================================
-    # 🧠 SUPER AGGRESSIVE SEARCH (SPELLING KILLER)
+    # 🧠 SUPER AGGRESSIVE SEARCH (SPELLING KILLER) - NO CHANGE
     # =====================================================
     async def get_search_results(self, query, file_type=None, lang=None, quality=None, year=None, size_key=None, offset=0, limit=10):
         try:
@@ -34,18 +34,18 @@ class Media:
                         "index": "default",
                         "text": {
                             "query": query,
-                            "path": ["file_name", "caption"], # File Name aur Caption dono check karega
+                            "path": ["file_name", "caption"], 
                             "fuzzy": {
-                                "maxEdits": 2,       # 2 Galtiyan Maaf
-                                "prefixLength": 0,   # Shuruat mein galti bhi chalegi (Avngers -> Avengers)
-                                "maxExpansions": 100 # Zyada variations check karega
+                                "maxEdits": 2,       
+                                "prefixLength": 0,   
+                                "maxExpansions": 100 
                             }
                         }
                     }
                 }
             ]
             
-            # --- FILTERS (Logic same as before) ---
+            # --- FILTERS ---
             match = {}
             if file_type and file_type != "None": match["file_type"] = file_type
             
@@ -111,7 +111,7 @@ class Media:
         cursor.skip(offset).limit(limit)
         return await cursor.to_list(length=limit)
 
-    # --- REST SAME AS BEFORE ---
+    # --- YEAR DETECTION ---
     async def get_unique_years(self, query):
         try:
             pipeline = [{"$match": {"file_name": {"$regex": query, "$options": "i"}}}, {"$limit": 50}, {"$project": {"file_name": 1}}]
@@ -123,11 +123,24 @@ class Media:
             return sorted(list(years), reverse=True)
         except: return []
 
+    # =====================================================
+    # 📝 UPDATED SAVE LOGIC (SMART STATUS RETURN)
+    # =====================================================
     async def save_file(self, message):
+        """
+        Returns:
+        - 'saved': File successfully saved.
+        - 'duplicate': File already exists.
+        - 'error': Not a valid media file or error occurred.
+        """
         try:
             file_info = get_file_details(message)
-            if not file_info: return False
-            if await self.col.find_one({'file_unique_id': file_info['file_unique_id']}): return False
+            if not file_info:
+                return 'error' # Media nahi hai (Text/Emoji etc)
+
+            # Check Duplicate
+            if await self.col.find_one({'file_unique_id': file_info['file_unique_id']}):
+                return 'duplicate' # Pehle se DB mein hai
             
             doc = {
                 'file_id': file_info['file_id'],
@@ -142,9 +155,12 @@ class Media:
                 'link_id': generate_link_id()
             }
             await self.col.insert_one(doc)
-            return True
-        except: return False
+            return 'saved' # Nayi file save hui
+        except Exception as e:
+            logger.error(f"Save Error: {e}")
+            return 'error'
 
+    # --- UTILS ---
     async def get_next_sequence(self):
         doc = await self.seq_col.find_one_and_update({"_id": "search_id"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True)
         return doc["seq"]
