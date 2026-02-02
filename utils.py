@@ -5,13 +5,16 @@ import string
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ==========================================
-# 1. REGEX PATTERNS (Languages Defined Here)
+# 1. REGEX PATTERNS (Languages & Quality)
 # ==========================================
+# Maine yahan Kannada aur Malayalam bhi jod diya hai taaki detection aur strong ho jaye
 LANG_PATTERNS = {
     "Hindi": re.compile(r'\b(hindi|hin|dub|dual)\b', re.IGNORECASE),
     "English": re.compile(r'\b(english|eng)\b', re.IGNORECASE),
     "Tamil": re.compile(r'\b(tamil|tam)\b', re.IGNORECASE),
     "Telugu": re.compile(r'\b(telugu|tel)\b', re.IGNORECASE),
+    "Kannada": re.compile(r'\b(kannada|kan)\b', re.IGNORECASE),
+    "Malayalam": re.compile(r'\b(malayalam|mal)\b', re.IGNORECASE),
 }
 
 QUAL_PATTERNS = {
@@ -22,7 +25,7 @@ QUAL_PATTERNS = {
 }
 
 # ==========================================
-# 2. HELPER FUNCTIONS
+# 2. HELPER FUNCTIONS (No Changes Here)
 # ==========================================
 def get_file_details(message):
     media = message.document or message.video or message.audio
@@ -50,12 +53,26 @@ def generate_link_id(length=8):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 # ==========================================
-# 3. BUTTON PARSER (Modified for Tamil/Telugu)
+# 3. BUTTON PARSER (Smart Logic Added)
 # ==========================================
 async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None, a_qual=None, a_year=None, a_size=None, years=None):
     buttons = []
     bot_username = client.me.username if client.me else "Bot"
     
+    # ---------------------------------------------------
+    # 🧠 SMART DETECTION LOGIC (New Feature)
+    # Pehle hum check karenge ki files mein kaunsi languages maujood hain
+    # ---------------------------------------------------
+    available_langs = set()
+    
+    if files:
+        for file in files:
+            f_name = file['file_name']
+            # Har language pattern ko check karo
+            for lang_key, pattern in LANG_PATTERNS.items():
+                if pattern.search(f_name):
+                    available_langs.add(lang_key)
+
     # --- ROW 1: FILE RESULTS ---
     if not files:
          buttons.append([InlineKeyboardButton("🤷‍♂️ No results found", callback_data="none")])
@@ -70,7 +87,7 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
     def s(val): return val if val else "None"
     base = f"filter_{search_id}_0"
 
-    # --- ROW 2: TYPE FILTERS (Video/Docs) ---
+    # --- ROW 2: TYPE FILTERS ---
     type_row = []
     for t in ["video", "document"]:
         label = "📹 Videos" if t == "video" else "📂 Docs"
@@ -85,15 +102,25 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
          type_row.append(InlineKeyboardButton("🔄 Reset", callback_data=f"{base}_None_None_None_None_None"))
     buttons.append(type_row)
 
-    # --- ROW 3: LANGUAGES (Added Tamil & Telugu) ---
+    # --- ROW 3: SMART LANGUAGES (Dynamic Row) ---
     lang_row = []
-    # Yahan maine Tamil aur Telugu add kar diya hai
-    for lang in ["Hindi", "English", "Tamil", "Telugu"]:
-        l_code = lang.lower()
-        txt = f"✅ {lang}" if a_lang == l_code else lang
-        n_l = "None" if a_lang == l_code else l_code
-        lang_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{n_l}_{s(a_qual)}_{s(a_year)}_{s(a_size)}"))
-    buttons.append(lang_row)
+    
+    # Hum in languages ke liye check karenge
+    target_languages = ["Hindi", "English", "Tamil", "Telugu", "Kannada", "Malayalam"]
+    
+    for lang in target_languages:
+        # Button tabhi dikhao agar:
+        # 1. Wo language file name mein mili ho (available_langs mein ho)
+        # 2. YA user ne wo filter pehle se select kar rakha ho (taaki button gayab na ho jaye click karne par)
+        if lang in available_langs or (a_lang and a_lang == lang.lower()):
+            l_code = lang.lower()
+            txt = f"✅ {lang}" if a_lang == l_code else lang
+            n_l = "None" if a_lang == l_code else l_code
+            lang_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{n_l}_{s(a_qual)}_{s(a_year)}_{s(a_size)}"))
+    
+    # Agar koi bhi language mili hai to row add karo
+    if lang_row:
+        buttons.append(lang_row)
 
     # --- ROW 4: QUALITY ---
     qual_row = []
