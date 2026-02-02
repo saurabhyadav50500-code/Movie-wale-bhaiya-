@@ -23,25 +23,29 @@ class Media:
         except: pass
 
     # =====================================================
-    # 🧠 SMART SEARCH ENGINE (ATLAS + FALLBACK)
+    # 🧠 SUPER AGGRESSIVE SEARCH (SPELLING KILLER)
     # =====================================================
     async def get_search_results(self, query, file_type=None, lang=None, quality=None, year=None, size_key=None, offset=0, limit=10):
         try:
-            # 1️⃣ KOSHISH 1: Atlas Search (High-Tech)
+            # 1️⃣ ATLAS SEARCH (High Tolerance)
             pipeline = [
                 {
                     "$search": {
                         "index": "default",
                         "text": {
                             "query": query,
-                            "path": "file_name",
-                            "fuzzy": {"maxEdits": 2}
+                            "path": ["file_name", "caption"], # File Name aur Caption dono check karega
+                            "fuzzy": {
+                                "maxEdits": 2,       # 2 Galtiyan Maaf
+                                "prefixLength": 0,   # Shuruat mein galti bhi chalegi (Avngers -> Avengers)
+                                "maxExpansions": 100 # Zyada variations check karega
+                            }
                         }
                     }
                 }
             ]
             
-            # Filters Setup
+            # --- FILTERS (Logic same as before) ---
             match = {}
             if file_type and file_type != "None": match["file_type"] = file_type
             
@@ -69,23 +73,20 @@ class Media:
             cursor = self.col.aggregate(pipeline)
             results = await cursor.to_list(length=limit)
             
-            # ✅ Agar result mila, to return karo
             if results: return results
             
-            # ❌ Agar result nahi mila, to Fallback trigger karo
-            raise Exception("Zero results from Atlas")
+            # Agar result nahi mila, to Error raise karo fallback ke liye
+            raise Exception("No fuzzy match")
 
         except Exception as e:
-            # 2️⃣ KOSHISH 2: Simple Regex Search (Ye fail nahi hoti)
+            # 2️⃣ FALLBACK: Regex Search (Backup)
             return await self.get_search_results_fallback(query, file_type, lang, quality, year, size_key, offset, limit)
 
-    # --- OLD SIMPLE SEARCH (Backup Plan) ---
+    # --- FALLBACK SEARCH ---
     async def get_search_results_fallback(self, query, file_type, lang, quality, year, size_key, offset, limit):
-        # Query Tod-Mod (Ex: "Avengers War" -> "Avengers.*War")
         regex = "".join(f"(?=.*{re.escape(w)})" for w in query.split())
         mongo_query = {"file_name": {"$regex": regex, "$options": "i"}}
 
-        # Filters
         if file_type and file_type != "None": mongo_query["file_type"] = file_type
         
         if size_key and size_key != "None":
@@ -95,9 +96,8 @@ class Media:
             elif size_key == "xl": mongo_query["file_size"] = {"$gte": 2147483648}
 
         if lang and lang != "None":
-            pat = LANG_PATTERNS.get(lang.capitalize())
-            if pat: 
-                mongo_query["$and"] = mongo_query.get("$and", []) + [{"$or": [{"file_name": {"$regex": pat}}, {"caption": {"$regex": pat}}]}]
+             pat = LANG_PATTERNS.get(lang.capitalize())
+             if pat: mongo_query["$and"] = mongo_query.get("$and", []) + [{"$or": [{"file_name": {"$regex": pat}}, {"caption": {"$regex": pat}}]}]
         
         if quality and quality != "None":
             pat = QUAL_PATTERNS.get(quality, re.compile(rf'\b{quality}\b', re.IGNORECASE))
@@ -111,7 +111,7 @@ class Media:
         cursor.skip(offset).limit(limit)
         return await cursor.to_list(length=limit)
 
-    # --- YEAR DETECTION ---
+    # --- REST SAME AS BEFORE ---
     async def get_unique_years(self, query):
         try:
             pipeline = [{"$match": {"file_name": {"$regex": query, "$options": "i"}}}, {"$limit": 50}, {"$project": {"file_name": 1}}]
@@ -123,7 +123,6 @@ class Media:
             return sorted(list(years), reverse=True)
         except: return []
 
-    # --- SAVE FILE ---
     async def save_file(self, message):
         try:
             file_info = get_file_details(message)
@@ -146,7 +145,6 @@ class Media:
             return True
         except: return False
 
-    # --- UTILS ---
     async def get_next_sequence(self):
         doc = await self.seq_col.find_one_and_update({"_id": "search_id"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True)
         return doc["seq"]
