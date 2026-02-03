@@ -13,31 +13,39 @@ from database.users_chats_db import db_users
 from utils import get_size, btn_parser, sort_menu_buttons
 
 # ==========================================
-# 🧹 HELPER: CLEAN DISPLAY NAME (Purana Logic Same Hai)
+# 🧹 HELPER: CLEAN DISPLAY NAME (UPDATED FIX)
 # ==========================================
 def clean_display_name(filename):
     """
     File name ko clean karta hai display ke liye.
-    Removes: @usernames, brackets, extensions, dots, underscores.
+    Removes: @usernames, brackets, extensions, promo tags.
+    User Request: Remove (@ ; ' _ : *) and [Tg:-@Vpfills] type tags.
     """
     if not filename:
         return "Unknown File"
 
-    # 1. Remove Extension
+    # 1. Remove Extension (e.g., .mkv, .mp4)
     filename = re.sub(r'\.[a-z0-9]{2,5}$', '', filename, flags=re.IGNORECASE)
-    # 2. Remove Usernames & Promos
+
+    # 2. ⚡ Remove Specific Promo Tags like [Tg:-@VPFILLS] or [Tg-@Name]
+    # Ye line specifically us tag ko hatayegi jo screenshot me hai
+    filename = re.sub(r'\[\s*(?:Tg|Telegram)[:\-_]*@?\w+.*?\]', '', filename, flags=re.IGNORECASE)
+    
+    # 3. Remove Usernames (@name) & Links
     filename = re.sub(r'@\w+', '', filename)
-    filename = re.sub(r'(?:Tg|Telegram):?@?\w+', '', filename, flags=re.IGNORECASE)
     filename = re.sub(r'(?:https?://|www\.)\S+', '', filename)
-    # 3. Replace Brackets, Pipes, Underscores with Space
-    filename = re.sub(r'[\[\]\(\)\|\_\.\-]', ' ', filename)
-    # 4. Fix Spaces
+
+    # 4. Remove Specific Characters requested (@ ; ' _ : *) and Brackets
+    # Regex me in sabko space se replace kar rahe hain
+    filename = re.sub(r'[@;\'_:\*\[\]\(\)\{\}<>\|\.\-]', ' ', filename)
+
+    # 5. Fix Extra Spaces (Agar cleanup ke baad zyada gap ho jaye)
     filename = re.sub(r'\s+', ' ', filename).strip()
     
     return filename
 
 # ==========================================
-# 1. TEXT HANDLERS (Group & PM) - (Purana Logic Same Hai)
+# 1. TEXT HANDLERS (Group & PM)
 # ==========================================
 
 # Handler for GROUPS
@@ -94,7 +102,7 @@ async def process_search(client, message, is_pm):
     )
 
 # ==========================================
-# 2. CALLBACK HANDLER (Filters & Pagination & Sort) - (UPDATED)
+# 2. CALLBACK HANDLER (Filters & Pagination & Sort)
 # ==========================================
 # Regex update kiya hai 'sortmenu' aur 'next' ko support karne ke liye
 @Client.on_callback_query(filters.regex(r"^(next|filter|sortmenu)_"))
@@ -182,7 +190,7 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
         pass
 
 # ==========================================
-# 3. FILE DELIVERY (Purana Logic Same Hai)
+# 3. FILE DELIVERY
 # ==========================================
 @Client.on_message(filters.command("start") & filters.private, group=-1)
 async def file_delivery_handler(client, message):
@@ -196,7 +204,7 @@ async def file_delivery_handler(client, message):
     
     await db_users.add_user(message.from_user.id, message.from_user.first_name)
     
-    # Cleaning Name for display
+    # Cleaning Name for display (Uses UPDATED clean_display_name)
     raw_name = file_info.get('file_name', 'Unknown File')
     clean_name = clean_display_name(raw_name)
 
@@ -213,7 +221,7 @@ async def file_delivery_handler(client, message):
         await s_msg.edit(f"❌ Error: {e}")
 
 # ==========================================
-# 4. MISC HANDLERS (Purana Logic Same Hai)
+# 4. MISC HANDLERS
 # ==========================================
 @Client.on_callback_query(filters.regex("pages"))
 async def pages_handler(_, cb): 
