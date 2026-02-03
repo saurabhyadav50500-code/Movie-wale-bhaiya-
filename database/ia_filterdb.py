@@ -23,9 +23,9 @@ class Media:
         except: pass
 
     # =====================================================
-    # 🧠 SUPER AGGRESSIVE SEARCH (SPELLING KILLER) - NO CHANGE
+    # 🧠 SUPER AGGRESSIVE SEARCH (SPELLING KILLER) - UPDATED 🆕
     # =====================================================
-    async def get_search_results(self, query, file_type=None, lang=None, quality=None, year=None, size_key=None, offset=0, limit=10):
+    async def get_search_results(self, query, file_type=None, lang=None, quality=None, year=None, size_key=None, sort_key=None, offset=0, limit=10):
         try:
             # 1️⃣ ATLAS SEARCH (High Tolerance)
             pipeline = [
@@ -68,6 +68,13 @@ class Media:
             if and_cond: match["$and"] = and_cond
             if match: pipeline.append({"$match": match})
             
+            # --- 🆕 SORTING LOGIC (ATLAS) ---
+            if sort_key and sort_key != "None":
+                if sort_key == "new": pipeline.append({"$sort": {"_id": -1}})   # Newest First
+                elif sort_key == "old": pipeline.append({"$sort": {"_id": 1}})    # Oldest First
+                elif sort_key == "max": pipeline.append({"$sort": {"file_size": -1}}) # Largest Size
+                elif sort_key == "min": pipeline.append({"$sort": {"file_size": 1}})  # Smallest Size
+            
             pipeline.extend([{"$skip": offset}, {"$limit": limit}])
             
             cursor = self.col.aggregate(pipeline)
@@ -80,10 +87,11 @@ class Media:
 
         except Exception as e:
             # 2️⃣ FALLBACK: Regex Search (Backup)
-            return await self.get_search_results_fallback(query, file_type, lang, quality, year, size_key, offset, limit)
+            # Yahan bhi 'sort_key' pass kar rahe hain
+            return await self.get_search_results_fallback(query, file_type, lang, quality, year, size_key, sort_key, offset, limit)
 
-    # --- FALLBACK SEARCH ---
-    async def get_search_results_fallback(self, query, file_type, lang, quality, year, size_key, offset, limit):
+    # --- FALLBACK SEARCH - UPDATED 🆕 ---
+    async def get_search_results_fallback(self, query, file_type, lang, quality, year, size_key, sort_key, offset, limit):
         regex = "".join(f"(?=.*{re.escape(w)})" for w in query.split())
         mongo_query = {"file_name": {"$regex": regex, "$options": "i"}}
 
@@ -107,11 +115,18 @@ class Media:
             mongo_query["$and"] = mongo_query.get("$and", []) + [{"file_name": {"$regex": re.compile(rf'\b{year}\b')}}]
 
         cursor = self.col.find(mongo_query)
-        cursor.sort('_id', -1)
+        
+        # --- 🆕 SORTING LOGIC (CURSOR) ---
+        if sort_key == "new": cursor.sort('_id', -1)
+        elif sort_key == "old": cursor.sort('_id', 1)
+        elif sort_key == "max": cursor.sort('file_size', -1)
+        elif sort_key == "min": cursor.sort('file_size', 1)
+        else: cursor.sort('_id', -1) # Default behavior
+
         cursor.skip(offset).limit(limit)
         return await cursor.to_list(length=limit)
 
-    # --- YEAR DETECTION ---
+    # --- YEAR DETECTION (NO CHANGE) ---
     async def get_unique_years(self, query):
         try:
             pipeline = [{"$match": {"file_name": {"$regex": query, "$options": "i"}}}, {"$limit": 50}, {"$project": {"file_name": 1}}]
@@ -124,7 +139,7 @@ class Media:
         except: return []
 
     # =====================================================
-    # 📝 UPDATED SAVE LOGIC (SMART STATUS RETURN)
+    # 📝 UPDATED SAVE LOGIC (SMART STATUS RETURN) - NO CHANGE
     # =====================================================
     async def save_file(self, message):
         """
@@ -160,7 +175,7 @@ class Media:
             logger.error(f"Save Error: {e}")
             return 'error'
 
-    # --- UTILS ---
+    # --- UTILS (NO CHANGE) ---
     async def get_next_sequence(self):
         doc = await self.seq_col.find_one_and_update({"_id": "search_id"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True)
         return doc["seq"]
