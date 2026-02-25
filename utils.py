@@ -45,7 +45,7 @@ def generate_link_id(length=8):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 # ==========================================
-# 🛠️ BUTTON PARSER - UPDATED (With Year Menu)
+# 🛠️ BUTTON PARSER - UPDATED (With Size Menu)
 # ==========================================
 async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None, a_qual=None, a_year=None, a_size=None, a_sort=None, years=None):
     buttons = []
@@ -97,16 +97,16 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
     # 4. YEAR & SIZE BUTTONS
     ys_row = []
     
-    # 📅 Select Year Button (Naya Button)
+    # 📅 Select Year Button
     year_label = f"{a_year} ✅" if a_year and a_year != "None" else "📅 Select Year"
     ys_row.append(InlineKeyboardButton(year_label, callback_data=f"yearmenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
 
-    # Sizes Buttons (<500MB aur 1GB+)
-    sizes = [("s", "<500MB"), ("l", "1GB+")]
-    for k, v in sizes:
-        txt = f"✅ {v}" if a_size == k else v
-        n_s = "None" if a_size == k else k
-        ys_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{n_s}_{s(a_sort)}"))
+    # 💾 Select Size Button (Naya)
+    size_labels = {"s": "<500MB", "m": "500MB-1GB", "l": "1GB-2GB", "xl": ">2GB"}
+    size_display = size_labels.get(a_size, a_size)
+    size_label = f"{size_display} ✅" if a_size and a_size != "None" else "💾 Select Size"
+    ys_row.append(InlineKeyboardButton(size_label, callback_data=f"sizemenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
+    
     buttons.append(ys_row)
 
     # 5. SORT BUTTON
@@ -228,20 +228,14 @@ async def qual_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
 # 📅 YEAR MENU GENERATOR
 # ==========================================
 async def year_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a_size, a_sort, available_years):
-    """
-    Shows available year options dynamically in a sub-menu.
-    """
     def s(val): return val if val else "None"
     
     back_data = f"filter_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
     
     buttons = []
-    
-    # Fallback default years agar database me specific years na mile toh
     if not available_years:
         available_years = ["2025", "2024", "2023", "2022", "2021", "2020"]
         
-    # Sirf top 8 years dikhayenge taaki list bahut lambi na ho jaye
     years_to_show = available_years[:8]
     
     row = []
@@ -250,25 +244,57 @@ async def year_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
         is_active = (yr_str == str(a_year))
         text = f"{yr_str} ✅" if is_active else yr_str
         
-        # Agar already selected hai aur click kare to deselect ho jaye (None)
         val = "None" if is_active else yr_str
         base_data = f"filter_{search_id}_0_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{val}_{s(a_size)}_{s(a_sort)}"
         
         row.append(InlineKeyboardButton(text, callback_data=base_data))
-        
-        # Do buttons ek row me
         if len(row) == 2:
             buttons.append(row)
             row = []
             
-    if row: 
-        buttons.append(row)
+    if row: buttons.append(row)
 
-    # Agar koi Year select kiya hua hai to "All Years" ka option dikhaye
     if a_year and a_year != "None":
         all_year_data = f"filter_{search_id}_0_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_None_{s(a_size)}_{s(a_sort)}"
         buttons.append([InlineKeyboardButton("📅 All Years", callback_data=all_year_data)])
 
     buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=back_data)])
+    return InlineKeyboardMarkup(buttons)
+
+# ==========================================
+# 💾 SIZE MENU GENERATOR
+# ==========================================
+async def size_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a_size, a_sort):
+    def s(val): return val if val else "None"
     
+    back_data = f"filter_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
+    
+    buttons = []
+    options = [
+        ("s", "<500MB"), 
+        ("m", "500MB - 1GB"), 
+        ("l", "1GB - 2GB"), 
+        ("xl", ">2GB")
+    ]
+    
+    row = []
+    for code, label in options:
+        is_active = (code == a_size)
+        text = f"{label} ✅" if is_active else label
+        
+        val = "None" if is_active else code
+        base_data = f"filter_{search_id}_0_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{val}_{s(a_sort)}"
+        
+        row.append(InlineKeyboardButton(text, callback_data=base_data))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+            
+    if row: buttons.append(row)
+
+    if a_size and a_size != "None":
+        all_size_data = f"filter_{search_id}_0_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_None_{s(a_sort)}"
+        buttons.append([InlineKeyboardButton("💾 All Sizes", callback_data=all_size_data)])
+
+    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=back_data)])
     return InlineKeyboardMarkup(buttons)
