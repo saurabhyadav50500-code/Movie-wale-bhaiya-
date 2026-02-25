@@ -45,7 +45,7 @@ def generate_link_id(length=8):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 # ==========================================
-# 🛠️ BUTTON PARSER - UPDATED (With Quality Menu)
+# 🛠️ BUTTON PARSER - UPDATED (With Year Menu)
 # ==========================================
 async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None, a_qual=None, a_year=None, a_size=None, a_sort=None, years=None):
     buttons = []
@@ -88,20 +88,20 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
     lang_label = f"{a_lang.title()} ✅" if a_lang and a_lang != "None" else "🗣 Select Language"
     lq_row.append(InlineKeyboardButton(lang_label, callback_data=f"langmenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
     
-    # 📺 Select Quality Button (New)
+    # 📺 Select Quality Button
     qual_label = f"{a_qual} ✅" if a_qual and a_qual != "None" else "📺 Select Quality"
     lq_row.append(InlineKeyboardButton(qual_label, callback_data=f"qualmenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
     
     buttons.append(lq_row)
 
-    # 4. YEARS & SIZE BUTTONS
+    # 4. YEAR & SIZE BUTTONS
     ys_row = []
-    available_years = years if years else []
-    for year in available_years[:2]:
-        txt = f"✅ {year}" if a_year == year else year
-        n_y = "None" if a_year == year else year
-        ys_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{n_y}_{s(a_size)}_{s(a_sort)}"))
+    
+    # 📅 Select Year Button (Naya Button)
+    year_label = f"{a_year} ✅" if a_year and a_year != "None" else "📅 Select Year"
+    ys_row.append(InlineKeyboardButton(year_label, callback_data=f"yearmenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
 
+    # Sizes Buttons (<500MB aur 1GB+)
     sizes = [("s", "<500MB"), ("l", "1GB+")]
     for k, v in sizes:
         txt = f"✅ {v}" if a_size == k else v
@@ -198,30 +198,61 @@ async def lang_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
 # 📺 QUALITY MENU GENERATOR
 # ==========================================
 async def qual_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a_size, a_sort):
+    def s(val): return val if val else "None"
+    
+    back_data = f"filter_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
+    
+    buttons = []
+    options = [("1080p", "1080p"), ("720p", "720p"), ("480p", "480p"), ("hd", "HD"), ("4k", "4k")]
+    
+    row = []
+    for code, label in options:
+        is_active = (code == a_qual)
+        text = f"{label} ✅" if is_active else label
+        val = "None" if is_active else code
+        base_data = f"filter_{search_id}_0_{s(a_type)}_{s(a_lang)}_{val}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
+        row.append(InlineKeyboardButton(text, callback_data=base_data))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row: buttons.append(row)
+
+    if a_qual and a_qual != "None":
+        all_qual_data = f"filter_{search_id}_0_{s(a_type)}_{s(a_lang)}_None_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
+        buttons.append([InlineKeyboardButton("🌌 All Qualities", callback_data=all_qual_data)])
+
+    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=back_data)])
+    return InlineKeyboardMarkup(buttons)
+
+# ==========================================
+# 📅 YEAR MENU GENERATOR
+# ==========================================
+async def year_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a_size, a_sort, available_years):
     """
-    Shows available quality options in a sub-menu.
+    Shows available year options dynamically in a sub-menu.
     """
     def s(val): return val if val else "None"
     
     back_data = f"filter_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
     
     buttons = []
-    options = [
-        ("1080p", "1080p"), 
-        ("720p", "720p"), 
-        ("480p", "480p"), 
-        ("hd", "HD"),
-        ("4k", "4k")
-    ]
+    
+    # Fallback default years agar database me specific years na mile toh
+    if not available_years:
+        available_years = ["2025", "2024", "2023", "2022", "2021", "2020"]
+        
+    # Sirf top 8 years dikhayenge taaki list bahut lambi na ho jaye
+    years_to_show = available_years[:8]
     
     row = []
-    for code, label in options:
-        is_active = (code == a_qual)
-        text = f"{label} ✅" if is_active else label
+    for year in years_to_show:
+        yr_str = str(year)
+        is_active = (yr_str == str(a_year))
+        text = f"{yr_str} ✅" if is_active else yr_str
         
         # Agar already selected hai aur click kare to deselect ho jaye (None)
-        val = "None" if is_active else code
-        base_data = f"filter_{search_id}_0_{s(a_type)}_{s(a_lang)}_{val}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
+        val = "None" if is_active else yr_str
+        base_data = f"filter_{search_id}_0_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{val}_{s(a_size)}_{s(a_sort)}"
         
         row.append(InlineKeyboardButton(text, callback_data=base_data))
         
@@ -233,10 +264,10 @@ async def qual_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
     if row: 
         buttons.append(row)
 
-    # Agar koi quality select ki hui hai to "All Qualities" ka option dikhaye
-    if a_qual and a_qual != "None":
-        all_qual_data = f"filter_{search_id}_0_{s(a_type)}_{s(a_lang)}_None_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
-        buttons.append([InlineKeyboardButton("🌌 All Qualities", callback_data=all_qual_data)])
+    # Agar koi Year select kiya hua hai to "All Years" ka option dikhaye
+    if a_year and a_year != "None":
+        all_year_data = f"filter_{search_id}_0_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_None_{s(a_size)}_{s(a_sort)}"
+        buttons.append([InlineKeyboardButton("📅 All Years", callback_data=all_year_data)])
 
     buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=back_data)])
     
