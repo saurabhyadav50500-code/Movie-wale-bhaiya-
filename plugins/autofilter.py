@@ -9,8 +9,8 @@ from pyrogram.errors import MessageNotModified
 from database.ia_filterdb import db
 from database.analytics import analytics
 from database.users_chats_db import db_users
-# ⚠️ Note: Naya year_menu_buttons yahan add kiya gaya hai
-from utils import get_size, btn_parser, sort_menu_buttons, lang_menu_buttons, qual_menu_buttons, year_menu_buttons
+# ⚠️ Note: Naya size_menu_buttons yahan add kiya gaya hai
+from utils import get_size, btn_parser, sort_menu_buttons, lang_menu_buttons, qual_menu_buttons, year_menu_buttons, size_menu_buttons
 
 # ==========================================
 # 🧹 HELPER: CLEAN DISPLAY NAME (UPDATED FIX)
@@ -102,13 +102,13 @@ async def process_search(client, message, is_pm):
     )
 
 # ==========================================
-# 2. CALLBACK HANDLER (Filters & Pagination, Sort, Lang, Qual, Year)
+# 2. CALLBACK HANDLER (Filters & Pagination, Sort, Lang, Qual, Year, Size)
 # ==========================================
-# Regex update kiya hai 'sortmenu', 'langmenu', 'qualmenu', aur 'yearmenu' ko support karne ke liye
-@Client.on_callback_query(filters.regex(r"^(next|filter|sortmenu|langmenu|qualmenu|yearmenu)_"))
+# Regex update kiya hai 'sizemenu' ko support karne ke liye
+@Client.on_callback_query(filters.regex(r"^(next|filter|sortmenu|langmenu|qualmenu|yearmenu|sizemenu)_"))
 async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     data = callback.data.split("_")
-    action = data[0] # 'filter', 'next', 'sortmenu', 'langmenu', 'qualmenu', or 'yearmenu'
+    action = data[0] # 'filter', 'next', 'sortmenu', 'langmenu', 'qualmenu', 'yearmenu' or 'sizemenu'
     
     try:
         # Data format: action_id_offset_type_lang_qual_year_size_sort
@@ -128,6 +128,14 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
 
     except (IndexError, ValueError):
         return await callback.answer("❌ Error parsing data.", show_alert=True)
+
+    # --- 💾 HANDLE SIZE MENU CLICK ---
+    if action == "sizemenu":
+        new_markup = await size_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a_size, a_sort)
+        try:
+            await callback.edit_message_reply_markup(reply_markup=new_markup)
+        except errors.MessageNotModified: pass
+        return
 
     # --- 📅 HANDLE YEAR MENU CLICK ---
     if action == "yearmenu":
@@ -205,6 +213,11 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     if a_qual: status.append(f"{a_qual}")
     if a_year: status.append(f"{a_year}")
     
+    # 🆕 Show Active Size in Text
+    if a_size:
+        size_names = {"s": "<500MB", "m": "500MB - 1GB", "l": "1GB - 2GB", "xl": ">2GB"}
+        status.append(size_names.get(a_size, a_size))
+        
     # 🆕 Show Active Sort in Text
     if a_sort:
         sort_names = {"new": "Newest", "old": "Oldest", "max": "Largest", "min": "Smallest"}
