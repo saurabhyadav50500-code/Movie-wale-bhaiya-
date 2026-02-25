@@ -45,7 +45,7 @@ def generate_link_id(length=8):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 # ==========================================
-# 🛠️ BUTTON PARSER - UPDATED (With Sort)
+# 🛠️ BUTTON PARSER - UPDATED (With Sort & Lang Menu)
 # ==========================================
 async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None, a_qual=None, a_year=None, a_size=None, a_sort=None, years=None):
     buttons = []
@@ -54,7 +54,6 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
     def s(val): return val if val else "None"
     
     # Base Callback: filter_ID_OFFSET_TYPE_LANG_QUAL_YEAR_SIZE_SORT
-    # Note: a_sort last me add kiya gaya hai
     base = f"filter_{search_id}_0"
 
     # 1. FILE RESULTS
@@ -78,7 +77,6 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
             new_val = "None"
         else:
             new_val = t
-        # Format: base_TYPE_lang_qual_year_size_sort
         type_row.append(InlineKeyboardButton(label, callback_data=f"{base}_{new_val}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
     
     # Reset Button
@@ -88,12 +86,12 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
 
     # 3. LANG & QUAL BUTTONS
     lq_row = []
-    for lang in ["Hindi", "English"]:
-        l_code = lang.lower()
-        txt = f"✅ {lang}" if a_lang == l_code else lang
-        n_l = "None" if a_lang == l_code else l_code
-        lq_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{n_l}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
     
+    # 🗣️ Select Language Button (Qualities ke bagal me dikhega)
+    lang_label = f"{a_lang.title()} ✅" if a_lang and a_lang != "None" else "🗣 Select Language"
+    lq_row.append(InlineKeyboardButton(lang_label, callback_data=f"langmenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
+    
+    # Qualities Button
     for qual in ["720p", "1080p"]:
         q_code = qual.lower()
         txt = f"✅ {qual}" if a_qual == q_code else qual
@@ -116,8 +114,7 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
         ys_row.append(InlineKeyboardButton(txt, callback_data=f"{base}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{n_s}_{s(a_sort)}"))
     buttons.append(ys_row)
 
-    # 5. SORT BUTTON (NEW 📂)
-    # Click karne par 'sortmenu' callback trigger hoga
+    # 5. SORT BUTTON
     current_sort_label = "Relevance"
     if a_sort == "new": current_sort_label = "Newest"
     elif a_sort == "old": current_sort_label = "Oldest"
@@ -130,10 +127,8 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
 
     # 6. PAGINATION
     nav = []
-    # Current state string for pagination
     cb_state = f"{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
     
-    # Note: 'next_' ko 'filter_' kar diya hai taaki autofilter.py ka regex match ho
     if offset >= 10:
         nav.append(InlineKeyboardButton("⬅️ Back", callback_data=f"filter_{search_id}_{offset-10}_{cb_state}"))
     
@@ -156,16 +151,10 @@ async def sort_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
     """
     def s(val): return val if val else "None"
     
-    # Wapas main filter menu par jaane ke liye data
     back_data = f"filter_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
-    
-    # Common prefix for selecting a sort option
-    # Format: filter_ID_OFFSET_TYPE_LANG_QUAL_YEAR_SIZE_NEW_SORT
     base_data = f"filter_{search_id}_0_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}"
 
     buttons = []
-    
-    # Options
     options = [
         ("rel", "Relevance (Default)"),
         ("new", "Newest First"),
@@ -175,14 +164,60 @@ async def sort_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
     ]
     
     for code, label in options:
-        # Checkmark logic
         is_active = (code == "rel" and a_sort is None) or (code == a_sort)
         text = f"✅ {label}" if is_active else label
         
-        # 'rel' ke liye None bhejenge
         val = "None" if code == "rel" else code
         buttons.append([InlineKeyboardButton(text, callback_data=f"{base_data}_{val}")])
 
     buttons.append([InlineKeyboardButton("⬅️ Back to Filters", callback_data=back_data)])
+    
+    return InlineKeyboardMarkup(buttons)
+
+# ==========================================
+# 🗣️ LANGUAGE MENU GENERATOR
+# ==========================================
+async def lang_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a_size, a_sort):
+    """
+    Shows available language options in a sub-menu.
+    """
+    def s(val): return val if val else "None"
+    
+    # Wapas main filter menu par jaane ke liye
+    back_data = f"filter_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
+    
+    buttons = []
+    options = [
+        ("english", "English"), 
+        ("hindi", "Hindi"), 
+        ("tamil", "Tamil"), 
+        ("telugu", "Telugu")
+    ]
+    
+    row = []
+    for code, label in options:
+        is_active = (code == a_lang)
+        text = f"{label} ✅" if is_active else label
+        
+        # Agar already selected hai aur click kare to deselect ho jaye (None)
+        val = "None" if is_active else code
+        base_data = f"filter_{search_id}_0_{s(a_type)}_{val}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
+        
+        row.append(InlineKeyboardButton(text, callback_data=base_data))
+        
+        # Do buttons ek row me
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+            
+    if row: 
+        buttons.append(row)
+
+    # Agar koi language select ki hui hai to "All Languages" ka option dikhaye
+    if a_lang and a_lang != "None":
+        all_lang_data = f"filter_{search_id}_0_{s(a_type)}_None_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
+        buttons.append([InlineKeyboardButton("🌍 All Languages", callback_data=all_lang_data)])
+
+    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=back_data)])
     
     return InlineKeyboardMarkup(buttons)
