@@ -9,8 +9,8 @@ from pyrogram.errors import MessageNotModified
 from database.ia_filterdb import db
 from database.analytics import analytics
 from database.users_chats_db import db_users
-# ⚠️ Note: btn_parser, sort_menu_buttons, lang_menu_buttons aur qual_menu_buttons ab utils se aa rahe hain
-from utils import get_size, btn_parser, sort_menu_buttons, lang_menu_buttons, qual_menu_buttons
+# ⚠️ Note: Naya year_menu_buttons yahan add kiya gaya hai
+from utils import get_size, btn_parser, sort_menu_buttons, lang_menu_buttons, qual_menu_buttons, year_menu_buttons
 
 # ==========================================
 # 🧹 HELPER: CLEAN DISPLAY NAME (UPDATED FIX)
@@ -102,13 +102,13 @@ async def process_search(client, message, is_pm):
     )
 
 # ==========================================
-# 2. CALLBACK HANDLER (Filters & Pagination, Sort, Lang, Qual)
+# 2. CALLBACK HANDLER (Filters & Pagination, Sort, Lang, Qual, Year)
 # ==========================================
-# Regex update kiya hai 'sortmenu', 'langmenu', aur 'qualmenu' ko support karne ke liye
-@Client.on_callback_query(filters.regex(r"^(next|filter|sortmenu|langmenu|qualmenu)_"))
+# Regex update kiya hai 'sortmenu', 'langmenu', 'qualmenu', aur 'yearmenu' ko support karne ke liye
+@Client.on_callback_query(filters.regex(r"^(next|filter|sortmenu|langmenu|qualmenu|yearmenu)_"))
 async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     data = callback.data.split("_")
-    action = data[0] # 'filter', 'next', 'sortmenu', 'langmenu', or 'qualmenu'
+    action = data[0] # 'filter', 'next', 'sortmenu', 'langmenu', 'qualmenu', or 'yearmenu'
     
     try:
         # Data format: action_id_offset_type_lang_qual_year_size_sort
@@ -128,6 +128,19 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
 
     except (IndexError, ValueError):
         return await callback.answer("❌ Error parsing data.", show_alert=True)
+
+    # --- 📅 HANDLE YEAR MENU CLICK ---
+    if action == "yearmenu":
+        query = await db.get_search_query(search_id)
+        if not query:
+            return await callback.answer("❌ Search Expired.", show_alert=True)
+            
+        years = await db.get_unique_years(query)
+        new_markup = await year_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a_size, a_sort, years)
+        try:
+            await callback.edit_message_reply_markup(reply_markup=new_markup)
+        except errors.MessageNotModified: pass
+        return
 
     # --- 📺 HANDLE QUALITY MENU CLICK ---
     if action == "qualmenu":
