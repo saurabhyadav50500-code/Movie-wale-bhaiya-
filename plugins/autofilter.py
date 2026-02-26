@@ -9,7 +9,7 @@ from pyrogram.errors import MessageNotModified
 from database.ia_filterdb import db
 from database.analytics import analytics
 from database.users_chats_db import db_users
-# ⚠️ Note: Naya size_menu_buttons yahan add kiya gaya hai
+# ⚠️ Note: Naya size_menu_buttons aur baaki sab menus utils se import kiye gaye hain
 from utils import get_size, btn_parser, sort_menu_buttons, lang_menu_buttons, qual_menu_buttons, year_menu_buttons, size_menu_buttons
 
 # ==========================================
@@ -104,7 +104,7 @@ async def process_search(client, message, is_pm):
 # ==========================================
 # 2. CALLBACK HANDLER (Filters & Pagination, Sort, Lang, Qual, Year, Size)
 # ==========================================
-# Regex update kiya hai 'sizemenu' ko support karne ke liye
+# Regex update kiya gaya hai saare naye menus ko support karne ke liye
 @Client.on_callback_query(filters.regex(r"^(next|filter|sortmenu|langmenu|qualmenu|yearmenu|sizemenu)_"))
 async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     data = callback.data.split("_")
@@ -117,13 +117,12 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
         
         def c(v): return None if v == "None" else v
         
-        # Safely parse parameters (Existing + New Sort Param)
+        # Safely parse parameters
         a_type = c(data[3]) if len(data) > 3 else None
         a_lang = c(data[4]) if len(data) > 4 else None
         a_qual = c(data[5]) if len(data) > 5 else None
         a_year = c(data[6]) if len(data) > 6 else None
         a_size = c(data[7]) if len(data) > 7 else None
-        # 🆕 New Sort Parameter (Index 8)
         a_sort = c(data[8]) if len(data) > 8 else None 
 
     except (IndexError, ValueError):
@@ -158,7 +157,7 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
         except errors.MessageNotModified: pass
         return
 
-    # --- 🗣️ HANDLE LANGUAGE MENU CLICK ---
+    # --- 🌍 HANDLE LANGUAGE MENU CLICK ---
     if action == "langmenu":
         new_markup = await lang_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a_size, a_sort)
         try:
@@ -180,7 +179,7 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
     if not query:
         return await callback.answer("❌ Search Expired.", show_alert=True)
 
-    # Search with Filters (Pass a_sort to DB)
+    # Search with Filters (Pass saare filters to DB)
     files = await db.get_search_results(
         query, 
         file_type=a_type, 
@@ -199,7 +198,7 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
         else:
             await callback.answer("⚠️ No files found for this combo!", show_alert=False)
 
-    # Update Buttons (Pass a_sort logic so it persists)
+    # Update Buttons (Pass saare active filters)
     new_markup = await btn_parser(
         search_id, files, client, offset, 
         a_type, a_lang, a_qual, a_year, a_size, a_sort, 
