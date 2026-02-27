@@ -9,8 +9,8 @@ from pyrogram.errors import MessageNotModified
 from database.ia_filterdb import db
 from database.analytics import analytics
 from database.users_chats_db import db_users
-# ⚠️ Note: Naya size_menu_buttons aur baaki sab menus utils se import kiye gaye hain
-from utils import get_size, btn_parser, sort_menu_buttons, lang_menu_buttons, qual_menu_buttons, year_menu_buttons, size_menu_buttons
+# ⚠️ Note: Naya size_menu_buttons aur baaki sab menus, sahit check_verification import kiye gaye hain
+from utils import get_size, btn_parser, sort_menu_buttons, lang_menu_buttons, qual_menu_buttons, year_menu_buttons, size_menu_buttons, check_verification
 
 # ==========================================
 # 🧹 HELPER: CLEAN DISPLAY NAME (UPDATED FIX)
@@ -243,7 +243,20 @@ async def file_delivery_handler(client, message):
     if not file_info: 
         return await message.reply("❌ File not found (Deleted or Invalid).")
     
-    await db_users.add_user(message.from_user.id, message.from_user.first_name)
+    user_id = message.from_user.id
+    chat_id = file_info.get('chat_id')
+
+    # --- 🚦 VERIFICATION CHECK START ---
+    # Ye file dene se pehle check karega ki user verified hai ya nahi
+    is_verified, markup = await check_verification(client, user_id, chat_id, link_id)
+    if not is_verified:
+        return await message.reply(
+            "⚠️ **Verification Required!**\n\nIs file ko access karne ke liye kripya verification complete karein.",
+            reply_markup=markup
+        )
+    # --- 🚦 VERIFICATION CHECK END ---
+
+    await db_users.add_user(user_id, message.from_user.first_name)
     
     # Cleaning Name for display (Uses UPDATED clean_display_name)
     raw_name = file_info.get('file_name', 'Unknown File')
