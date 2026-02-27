@@ -315,7 +315,7 @@ async def size_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
 
 
 # ==========================================
-# 🔗 VERIFICATION & SHORTLINK SYSTEM (NEW)
+# 🔗 ADVANCED VERIFICATION & SHORTLINK SYSTEM
 # ==========================================
 async def get_shortlink(site, api, url):
     """Shortener API ko call karke shortlink banayega"""
@@ -332,53 +332,68 @@ async def get_shortlink(site, api, url):
 
 async def check_verification(client, user_id, chat_id, file_link_id):
     """
-    Returns (True, None) agar verified hai.
-    Returns (False, markup) agar verified nahi hai.
+    Checks user verification against group settings (Smart/Together modes).
+    Returns (True, None) if fully verified.
+    Returns (False, markup) if verification needed.
     """
     # 1. Premium & Admin Bypass Check
-    if await db_users.is_premium(user_id):
-        return True, None
-        
+    if await db_users.is_premium(user_id): return True, None
     try:
         member = await client.get_chat_member(chat_id, user_id)
-        if member.status in ["creator", "administrator"]:
-            return True, None
-    except:
-        pass
+        if member.status in ["creator", "administrator"]: return True, None
+    except: pass
 
-    # 2. Get Group Settings
-    settings = await db_users.get_group_shortener(chat_id)
-    if not settings or not settings.get("is_active") or not settings.get("shortener_api"):
-        return True, None # Shortener band hai to file de do
-
-    # 3. Check Database for Status
+    # 2. Get Group Settings & User Status
+    settings = await db_users.get_group_shortener_settings(chat_id)
     verify_status = await db_users.get_verify_status(user_id, chat_id)
-    expiry = verify_status.get("expiry_time", 0)
     
-    # Agar 24 ghante (ya set time) expire ho gaya, to reset karo
-    if time.time() > expiry:
-        verify_status = {} 
-
-    # 4. Multi-Level Checking Loop
-    required_levels = settings.get("verify_levels", 1) 
+    mode = settings.get("mode", "smart")
+    slots = settings.get("slots", {})
     
-    for level in range(1, required_levels + 1):
-        if not verify_status.get(f"level_{level}_done", False):
-            # Ye level baaki hai, iska shortlink banao
-            bot_username = client.me.username
-            deep_link = f"https://t.me/{bot_username}?start=verify_{level}_{user_id}_{chat_id}_{file_link_id}"
+    pending_levels = []
+    bot_username = client.me.username
+    
+    # 3. Check which levels are pending
+    for level_str in ["1", "2", "3"]:
+        slot_data = slots.get(level_str, {})
+        site = slot_data.get("site")
+        api = slot_data.get("api")
+        duration = slot_data.get("time", 86400)
+        
+        if not site or not api: 
+            continue # Slot is disabled
             
-            short_link = await get_shortlink(
-                settings["shortener_site"], 
-                settings["shortener_api"], 
-                deep_link
-            )
-            
-            markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"🔗 Verify Level {level}", url=short_link)],
-                [InlineKeyboardButton("❓ How to Verify", url="https://t.me/your_tutorial_channel")]
-            ])
-            return False, markup
+        last_verified_time = verify_status.get(f"level_{level_str}_time", 0)
+        
+        # Check if time expired
+        if time.time() - last_verified_time > duration:
+            pending_levels.append({
+                "level": level_str,
+                "site": site,
+                "api": api
+            })
 
-    # Sab levels complete ho gaye hain
-    return True, None
+    if not pending_levels:
+        return True, None # Sab verified hai
+
+    # 4. Generate Buttons based on Mode
+    buttons = []
+    
+    if mode == "together":
+        # Show ALL pending links at once
+        for pending in pending_levels:
+            lvl = pending["level"]
+            deep_link = f"https://t.me/{bot_username}?start=verify_{lvl}_{user_id}_{chat_id}_{file_link_id}"
+            short_link = await get_shortlink(pending["site"], pending["api"], deep_link)
+            buttons.append([InlineKeyboardButton(f"🔗 Verify Level {lvl}", url=short_link)])
+            
+    else: # "smart" mode
+        # Show ONLY the FIRST pending link
+        first_pending = pending_levels[0]
+        lvl = first_pending["level"]
+        deep_link = f"https://t.me/{bot_username}?start=verify_{lvl}_{user_id}_{chat_id}_{file_link_id}"
+        short_link = await get_shortlink(first_pending["site"], first_pending["api"], deep_link)
+        buttons.append([InlineKeyboardButton(f"🔗 Unlock Level {lvl}", url=short_link)])
+    
+    buttons.append([InlineKeyboardButton("❓ How to Verify", url="https://t.me/your_tutorial_channel")])
+    return False, InlineKeyboardMarkup(buttons)
