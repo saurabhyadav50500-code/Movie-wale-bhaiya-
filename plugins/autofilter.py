@@ -244,7 +244,9 @@ async def file_delivery_handler(client, message):
         return await message.reply("❌ File not found (Deleted or Invalid).")
     
     user_id = message.from_user.id
-    chat_id = file_info.get('chat_id')
+    
+    # Database fetch fallback logic included
+    chat_id = file_info.get('chat_id', 0)
 
     # --- 🚦 VERIFICATION CHECK START ---
     # Ye file dene se pehle check karega ki user verified hai ya nahi
@@ -268,7 +270,7 @@ async def file_delivery_handler(client, message):
         await client.send_cached_media(
             message.from_user.id, 
             file_info['file_id'], 
-            caption=file_info['caption'] or ""
+            caption=file_info.get('caption', "")
         )
         await s_msg.delete()
     except Exception as e:
