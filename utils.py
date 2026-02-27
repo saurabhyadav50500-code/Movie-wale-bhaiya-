@@ -313,7 +313,6 @@ async def size_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
     buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=back_data)])
     return InlineKeyboardMarkup(buttons)
 
-
 # ==========================================
 # 🔗 ADVANCED VERIFICATION & SHORTLINK SYSTEM
 # ==========================================
@@ -328,32 +327,35 @@ async def get_shortlink(site, api, url):
                     return data.get("shortenedUrl") or data.get("url")
     except Exception as e:
         print(f"Shortener API Error: {e}")
-    return url # Error aane par original deep link return karega
+    return url
 
-async def check_verification(client, user_id, chat_id, file_link_id):
+# --- 🚦 CORE FILE INTERCEPTOR ---
+async def check_verification(client, user_id, chat_id, file_link_id, message_obj=None):
     """
-    Checks user verification against group settings (Smart/Together modes).
-    Returns (True, None) if fully verified.
-    Returns (False, markup) if verification needed.
+    MUST run before sending file.
+    Returns True -> File is sent.
+    Returns False -> Execution stops, verification message is sent.
     """
-    # 1. Premium & Admin Bypass Check
-    if await db_users.is_premium(user_id): return True, None
+    # 1. Bypass Checks (Admin & Premium)
+    if await db_users.is_premium(user_id): 
+        return True
     try:
         member = await client.get_chat_member(chat_id, user_id)
-        if member.status in ["creator", "administrator"]: return True, None
-    except: pass
+        if member.status in ["creator", "administrator"]: 
+            return True
+    except: 
+        pass
 
-    # 2. Get Group Settings & User Status
+    # 2. Fetch Settings & Mode
     settings = await db_users.get_group_shortener_settings(chat_id)
     verify_status = await db_users.get_verify_status(user_id, chat_id)
-    
     mode = settings.get("mode", "smart")
     slots = settings.get("slots", {})
     
     pending_levels = []
     bot_username = client.me.username
     
-    # 3. Check which levels are pending
+    # 3. Check All 3 Levels
     for level_str in ["1", "2", "3"]:
         slot_data = slots.get(level_str, {})
         site = slot_data.get("site")
@@ -361,34 +363,27 @@ async def check_verification(client, user_id, chat_id, file_link_id):
         duration = slot_data.get("time", 86400)
         
         if not site or not api: 
-            continue # Slot is disabled
+            continue # Slot skipped if disabled
             
         last_verified_time = verify_status.get(f"level_{level_str}_time", 0)
         
-        # Check if time expired
+        # Check Time Gap
         if time.time() - last_verified_time > duration:
-            pending_levels.append({
-                "level": level_str,
-                "site": site,
-                "api": api
-            })
+            pending_levels.append({"level": level_str, "site": site, "api": api})
 
     if not pending_levels:
-        return True, None # Sab verified hai
+        return True # Sab levels done
 
-    # 4. Generate Buttons based on Mode
+    # 4. Generate Shortlinks & Send Message
     buttons = []
-    
     if mode == "together":
-        # Show ALL pending links at once
         for pending in pending_levels:
             lvl = pending["level"]
             deep_link = f"https://t.me/{bot_username}?start=verify_{lvl}_{user_id}_{chat_id}_{file_link_id}"
             short_link = await get_shortlink(pending["site"], pending["api"], deep_link)
             buttons.append([InlineKeyboardButton(f"🔗 Verify Level {lvl}", url=short_link)])
             
-    else: # "smart" mode
-        # Show ONLY the FIRST pending link
+    else: # "smart" or "dynamic" mode
         first_pending = pending_levels[0]
         lvl = first_pending["level"]
         deep_link = f"https://t.me/{bot_username}?start=verify_{lvl}_{user_id}_{chat_id}_{file_link_id}"
@@ -396,4 +391,13 @@ async def check_verification(client, user_id, chat_id, file_link_id):
         buttons.append([InlineKeyboardButton(f"🔗 Unlock Level {lvl}", url=short_link)])
     
     buttons.append([InlineKeyboardButton("❓ How to Verify", url="https://t.me/your_tutorial_channel")])
-    return False, InlineKeyboardMarkup(buttons)
+    markup = InlineKeyboardMarkup(buttons)
+    
+    # Message Send and Stop Execution
+    if message_obj:
+        await message_obj.reply(
+            "⚠️ **Verification Required!**\n\nIs group ke niyam ke anusaar, file lene se pehle verification complete karein.",
+            reply_markup=markup,
+            quote=True
+        )
+    return False
