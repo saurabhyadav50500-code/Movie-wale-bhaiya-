@@ -38,27 +38,30 @@ async def start_handler(client, message):
                 await db_users.update_verify_status(target_user_id, chat_id, level)
                 
                 # Check agar next level baaki hai
-                is_verified, markup = await check_verification(client, target_user_id, chat_id, file_link_id)
+                verify_result = await check_verification(client, target_user_id, chat_id, file_link_id, message)
+                
+                # Handle compatibility (Agar utils se tuple aaya ya direct boolean)
+                is_verified = verify_result[0] if isinstance(verify_result, tuple) else verify_result
                 
                 if not is_verified:
-                    return await message.reply(
-                        f"✅ **Level {level} Verified!**\n\n⚠️ Kripya aage ki file receive karne ke liye next level verify karein.",
+                    # Agar tuple return hua (purana utils logic), to manually button bhejo
+                    if isinstance(verify_result, tuple):
+                        return await message.reply(
+                            f"✅ **Level {level} Verified!**\n\n⚠️ Kripya aage ki file receive karne ke liye next level verify karein.",
+                            reply_markup=verify_result[1]
+                        )
+                    # Naye utils logic ke hisab se check_verification ne pehle hi button bhej diya hoga
+                    return
+                else:
+                    # ✅ ALL DONE! Provide the File Button
+                    bot_username = client.me.username
+                    markup = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📂 Get Your File Now", url=f"https://t.me/{bot_username}?start=file_{file_link_id}")]
+                    ])
+                    await message.reply(
+                        "🎉 **All Verifications Completed!** \n\nClick the button below to receive your file.", 
                         reply_markup=markup
                     )
-                else:
-                    s_msg = await message.reply("🎉 **All Verifications Completed!** \n\nSending your file now...")
-                    
-                    # File bhej do
-                    file_info = await db.get_file_by_link_id(file_link_id)
-                    if file_info:
-                        await client.send_cached_media(
-                            message.from_user.id, 
-                            file_info['file_id'], 
-                            caption=file_info.get('caption', "")
-                        )
-                        await s_msg.delete()
-                    else:
-                        await s_msg.edit("❌ File not found or deleted.")
                     return
             except Exception as e:
                 logger.error(f"Verification Error: {e}")
