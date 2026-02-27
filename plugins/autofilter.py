@@ -244,19 +244,15 @@ async def file_delivery_handler(client, message):
         return await message.reply("❌ File not found (Deleted or Invalid).")
     
     user_id = message.from_user.id
-    
-    # Database fetch fallback logic included
     chat_id = file_info.get('chat_id', 0)
 
-    # --- 🚦 VERIFICATION CHECK START ---
-    # Ye file dene se pehle check karega ki user verified hai ya nahi
-    is_verified, markup = await check_verification(client, user_id, chat_id, link_id)
-    if not is_verified:
-        return await message.reply(
-            "⚠️ **Verification Required!**\n\nIs file ko access karne ke liye kripya verification complete karein.",
-            reply_markup=markup
-        )
-    # --- 🚦 VERIFICATION CHECK END ---
+    # 🛑 -------------------------------------------
+    # EXACT INJECTION POINT: THE FILE INTERCEPTOR
+    # ----------------------------------------------
+    # Runs before anything else. If not verified, it stops here!
+    if not await check_verification(client, user_id, chat_id, link_id, message):
+        return  # Bot stops here, file is NOT sent.
+    # ----------------------------------------------
 
     await db_users.add_user(user_id, message.from_user.first_name)
     
