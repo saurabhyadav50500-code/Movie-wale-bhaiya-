@@ -2,6 +2,8 @@ import logging
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database.users_chats_db import db_users
+from database.ia_filterdb import db               # Naya import file nikalne ke liye
+from utils import check_verification              # Naya import verification check ke liye
 from info import ADMINS 
 
 # Logger setup
@@ -14,10 +16,58 @@ START_IMG = "https://images.unsplash.com/photo-1626814026160-2237a95fc5a0?q=80&w
 
 @Client.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
-    # Agar '/start file_id' hai (File mangi hai), to ignore karo
+    # Agar start payload ke saath aaya hai (link se start hua hai)
     if len(message.command) > 1:
-        return 
+        cmd = message.command[1]
+        
+        # --- 🔗 HANDLE VERIFICATION RETURN ---
+        if cmd.startswith("verify_"):
+            try:
+                # Format: verify_level_userid_chatid_fileid
+                _, level, target_user_id, chat_id, file_link_id = cmd.split("_")
+                level, target_user_id, chat_id = int(level), int(target_user_id), int(chat_id)
+                
+                # Check ki kisi aur ne to link share nahi kiya
+                if message.from_user.id != target_user_id:
+                    return await message.reply("❌ Ye link aapke liye nahi hai. Kripya bot me dobara request karein.")
+                    
+                settings = await db_users.get_group_shortener(chat_id)
+                verify_time = settings.get("verify_time", 86400) if settings else 86400
+                
+                # Update status in DB
+                await db_users.update_verify_status(target_user_id, chat_id, level, verify_time)
+                
+                # Check agar next level baaki hai
+                is_verified, markup = await check_verification(client, target_user_id, chat_id, file_link_id)
+                
+                if not is_verified:
+                    return await message.reply(
+                        f"✅ Level {level} Completed!\n\n⚠️ Aage ki file receive karne ke liye next level verify karein.",
+                        reply_markup=markup
+                    )
+                else:
+                    s_msg = await message.reply("🎉 **All Verifications Completed!** \n\nSending your file now...")
+                    
+                    # File bhej do
+                    file_info = await db.get_file_by_link_id(file_link_id)
+                    if file_info:
+                        await client.send_cached_media(
+                            message.from_user.id, 
+                            file_info['file_id'], 
+                            caption=file_info['caption'] or ""
+                        )
+                        await s_msg.delete()
+                    return
+            except Exception as e:
+                return await message.reply("❌ Invalid or Expired Verification Link.")
+                
+        # Agar 'file_' command hai to autofilter handler usko handle kar lega isliye yahan se return karo
+        if cmd.startswith("file_"):
+            return
 
+    # =========================================================
+    # --- NORMAL START MESSAGE (Aapka Purana Logic) ---
+    # =========================================================
     user_id = message.from_user.id
     first_name = message.from_user.first_name
 
