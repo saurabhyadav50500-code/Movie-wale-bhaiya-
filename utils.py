@@ -1,6 +1,9 @@
 import re
 import math
+import time
+import aiohttp
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from database.users_chats_db import db_users
 
 # --- REGEX PATTERNS ---
 LANG_PATTERNS = {
@@ -309,3 +312,73 @@ async def size_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
 
     buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=back_data)])
     return InlineKeyboardMarkup(buttons)
+
+
+# ==========================================
+# 🔗 VERIFICATION & SHORTLINK SYSTEM (NEW)
+# ==========================================
+async def get_shortlink(site, api, url):
+    """Shortener API ko call karke shortlink banayega"""
+    try:
+        req_url = f"https://{site}/api?api={api}&url={url}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(req_url) as response:
+                data = await response.json()
+                if data.get("status") == "success" or data.get("shortenedUrl"):
+                    return data.get("shortenedUrl") or data.get("url")
+    except Exception as e:
+        print(f"Shortener API Error: {e}")
+    return url # Error aane par original deep link return karega
+
+async def check_verification(client, user_id, chat_id, file_link_id):
+    """
+    Returns (True, None) agar verified hai.
+    Returns (False, markup) agar verified nahi hai.
+    """
+    # 1. Premium & Admin Bypass Check
+    if await db_users.is_premium(user_id):
+        return True, None
+        
+    try:
+        member = await client.get_chat_member(chat_id, user_id)
+        if member.status in ["creator", "administrator"]:
+            return True, None
+    except:
+        pass
+
+    # 2. Get Group Settings
+    settings = await db_users.get_group_shortener(chat_id)
+    if not settings or not settings.get("is_active") or not settings.get("shortener_api"):
+        return True, None # Shortener band hai to file de do
+
+    # 3. Check Database for Status
+    verify_status = await db_users.get_verify_status(user_id, chat_id)
+    expiry = verify_status.get("expiry_time", 0)
+    
+    # Agar 24 ghante (ya set time) expire ho gaya, to reset karo
+    if time.time() > expiry:
+        verify_status = {} 
+
+    # 4. Multi-Level Checking Loop
+    required_levels = settings.get("verify_levels", 1) 
+    
+    for level in range(1, required_levels + 1):
+        if not verify_status.get(f"level_{level}_done", False):
+            # Ye level baaki hai, iska shortlink banao
+            bot_username = client.me.username
+            deep_link = f"https://t.me/{bot_username}?start=verify_{level}_{user_id}_{chat_id}_{file_link_id}"
+            
+            short_link = await get_shortlink(
+                settings["shortener_site"], 
+                settings["shortener_api"], 
+                deep_link
+            )
+            
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🔗 Verify Level {level}", url=short_link)],
+                [InlineKeyboardButton("❓ How to Verify", url="https://t.me/your_tutorial_channel")]
+            ])
+            return False, markup
+
+    # Sab levels complete ho gaye hain
+    return True, None
