@@ -20,29 +20,29 @@ async def start_handler(client, message):
     if len(message.command) > 1:
         cmd = message.command[1]
         
-        # --- 🔗 HANDLE VERIFICATION RETURN ---
+        # --- 🔗 ADVANCED VERIFICATION RETURN HANDLER ---
         if cmd.startswith("verify_"):
             try:
-                # Format: verify_level_userid_chatid_fileid
-                _, level, target_user_id, chat_id, file_link_id = cmd.split("_")
-                level, target_user_id, chat_id = int(level), int(target_user_id), int(chat_id)
+                # Format: verify_{level}_{user_id}_{chat_id}_{file_id}
+                parts = cmd.split("_")
+                level = parts[1]
+                target_user_id = int(parts[2])
+                chat_id = int(parts[3])
+                file_link_id = parts[4]
                 
                 # Check ki kisi aur ne to link share nahi kiya
                 if message.from_user.id != target_user_id:
                     return await message.reply("❌ Ye link aapke liye nahi hai. Kripya bot me dobara request karein.")
                     
-                settings = await db_users.get_group_shortener(chat_id)
-                verify_time = settings.get("verify_time", 86400) if settings else 86400
-                
-                # Update status in DB
-                await db_users.update_verify_status(target_user_id, chat_id, level, verify_time)
+                # Update status in DB (Current Timestamp save karega)
+                await db_users.update_verify_status(target_user_id, chat_id, level)
                 
                 # Check agar next level baaki hai
                 is_verified, markup = await check_verification(client, target_user_id, chat_id, file_link_id)
                 
                 if not is_verified:
                     return await message.reply(
-                        f"✅ Level {level} Completed!\n\n⚠️ Aage ki file receive karne ke liye next level verify karein.",
+                        f"✅ **Level {level} Verified!**\n\n⚠️ Kripya aage ki file receive karne ke liye next level verify karein.",
                         reply_markup=markup
                     )
                 else:
@@ -54,11 +54,14 @@ async def start_handler(client, message):
                         await client.send_cached_media(
                             message.from_user.id, 
                             file_info['file_id'], 
-                            caption=file_info['caption'] or ""
+                            caption=file_info.get('caption', "")
                         )
                         await s_msg.delete()
+                    else:
+                        await s_msg.edit("❌ File not found or deleted.")
                     return
             except Exception as e:
+                logger.error(f"Verification Error: {e}")
                 return await message.reply("❌ Invalid or Expired Verification Link.")
                 
         # Agar 'file_' command hai to autofilter handler usko handle kar lega isliye yahan se return karo
