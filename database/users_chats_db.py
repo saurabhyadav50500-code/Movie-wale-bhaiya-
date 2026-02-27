@@ -1,4 +1,5 @@
 import logging
+import time
 import motor.motor_asyncio
 from info import MONGO_URI, DATABASE_NAME
 
@@ -121,5 +122,47 @@ class UserChatsDB:
     async def get_all_users(self):
         """Helper for Broadcast (No Cache needed usually)"""
         return self.col.find({})
+
+    # --- 🔗 SHORTENER & VERIFICATION LOGIC ---
+
+    async def get_group_shortener(self, chat_id):
+        """Group ki shortener settings fetch karega"""
+        chat = await self.get_group_status(chat_id)
+        if chat:
+            return {
+                "shortener_site": chat.get("shortener_site", "api.shareus.io"),
+                "shortener_api": chat.get("shortener_api", ""),
+                "verify_time": chat.get("verify_time", 86400), # 24 hours default
+                "is_active": chat.get("shortener_active", False),
+                "verify_levels": chat.get("verify_levels", 1) # Default 1, max 3
+            }
+        return None
+
+    async def is_premium(self, user_id):
+        """Check karega ki user premium hai ya nahi"""
+        user = await self.col.find_one({"id": user_id})
+        if user and user.get("premium_status", False):
+            return True
+        return False
+
+    async def get_verify_status(self, user_id, chat_id):
+        """User ki current verification status check karega"""
+        user = await self.col.find_one({"id": user_id})
+        if user and "verification" in user:
+            # chat_id ko string mein convert karke get karte hain kyunki MongoDB keys string hoti hain
+            return user["verification"].get(str(chat_id), {})
+        return {}
+
+    async def update_verify_status(self, user_id, chat_id, level, verify_time):
+        """Verification level aur expiry time update karega"""
+        expiry_time = time.time() + verify_time
+        await self.col.update_one(
+            {"id": user_id},
+            {"$set": {
+                f"verification.{chat_id}.level_{level}_done": True,
+                f"verification.{chat_id}.expiry_time": expiry_time
+            }},
+            upsert=True
+        )
 
 db_users = UserChatsDB()
