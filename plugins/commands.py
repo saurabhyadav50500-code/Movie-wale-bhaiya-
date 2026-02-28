@@ -23,11 +23,11 @@ async def start_handler(client, message):
         # --- 🔗 ADVANCED VERIFICATION RETURN HANDLER ---
         if cmd.startswith("verify_"):
             try:
-                # Format: verify_{level}_{user_id}_{chat_id}_{file_id}
+                # Format: verify_{level}_{user_id}_{group_id}_{file_id}
                 parts = cmd.split("_")
                 level = parts[1]
                 target_user_id = int(parts[2])
-                chat_id = int(parts[3])
+                group_id = int(parts[3])  # 🚨 STRICT TARGETING: Changed from chat_id to group_id
                 file_link_id = parts[4]
                 
                 # Check ki kisi aur ne to link share nahi kiya
@@ -35,10 +35,10 @@ async def start_handler(client, message):
                     return await message.reply("❌ Ye link aapke liye nahi hai. Kripya bot me dobara request karein.")
                     
                 # Update status in DB (Current Timestamp save karega)
-                await db_users.update_verify_status(target_user_id, chat_id, level)
+                await db_users.update_verify_status(target_user_id, group_id, level)
                 
                 # Check agar next level baaki hai
-                verify_result = await check_verification(client, target_user_id, chat_id, file_link_id, message)
+                verify_result = await check_verification(client, target_user_id, group_id, file_link_id, message)
                 
                 # Handle compatibility (Agar utils se tuple aaya ya direct boolean)
                 is_verified = verify_result[0] if isinstance(verify_result, tuple) else verify_result
@@ -53,10 +53,10 @@ async def start_handler(client, message):
                     # Naye utils logic ke hisab se check_verification ne pehle hi button bhej diya hoga
                     return
                 else:
-                    # ✅ ALL DONE! Provide the File Button
+                    # ✅ ALL DONE! Provide the File Button WITH STRICT GROUP ID
                     bot_username = client.me.username
                     markup = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📂 Get Your File Now", url=f"https://t.me/{bot_username}?start=file_{file_link_id}")]
+                        [InlineKeyboardButton("📂 Get Your File Now", url=f"https://t.me/{bot_username}?start=file_{file_link_id}_{group_id}")]
                     ])
                     await message.reply(
                         "🎉 **All Verifications Completed!** \n\nClick the button below to receive your file.", 
