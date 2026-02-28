@@ -9,8 +9,8 @@ from pyrogram.errors import MessageNotModified
 from database.ia_filterdb import db
 from database.analytics import analytics
 from database.users_chats_db import db_users
-# ⚠️ Note: Naya size_menu_buttons aur baaki sab menus, sahit check_verification import kiye gaye hain
-from utils import get_size, btn_parser, sort_menu_buttons, lang_menu_buttons, qual_menu_buttons, year_menu_buttons, size_menu_buttons, check_verification
+# ⚠️ Note: Naya size_menu_buttons aur baaki sab menus utils se import kiye gaye hain
+from utils import get_size, btn_parser, sort_menu_buttons, lang_menu_buttons, qual_menu_buttons, year_menu_buttons, size_menu_buttons
 
 # ==========================================
 # 🧹 HELPER: CLEAN DISPLAY NAME (UPDATED FIX)
@@ -85,17 +85,14 @@ async def process_search(client, message, is_pm):
             await message.reply_text(f"❌ **No Results Found for:** `{query}`\n\nKripya spelling check karein.")
         return
 
-    # Generate Buttons (Pass a_sort=None explicitly and pass chat_id for group targeting)
-    # Using fallback to 0 if PM
-    current_chat_id = message.chat.id if not is_pm else 0
+    # Generate Buttons (Pass a_sort=None explicitly)
     reply_markup = await btn_parser(
         search_id, 
         files, 
         client, 
         offset=0, 
         years=years, 
-        a_sort=None,
-        chat_id=current_chat_id
+        a_sort=None
     )
 
     await message.reply_text(
@@ -201,14 +198,11 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
         else:
             await callback.answer("⚠️ No files found for this combo!", show_alert=False)
 
-    # Update Buttons (Pass saare active filters and chat_id)
-    # Important: In inline callbacks, the chat where the button was clicked might be a group or PM
-    current_chat_id = callback.message.chat.id if callback.message.chat.type in ["supergroup", "group"] else 0
+    # Update Buttons (Pass saare active filters)
     new_markup = await btn_parser(
         search_id, files, client, offset, 
         a_type, a_lang, a_qual, a_year, a_size, a_sort, 
-        years=years,
-        chat_id=current_chat_id
+        years=years
     )
     
     text = f"🔎 **Results for:** `{query}`"
@@ -237,43 +231,19 @@ async def filter_pagination_handler(client: Client, callback: CallbackQuery):
         pass
 
 # ==========================================
-# 3. FILE DELIVERY (STRICT GATEKEEPER)
+# 3. FILE DELIVERY
 # ==========================================
 @Client.on_message(filters.command("start") & filters.private, group=-1)
 async def file_delivery_handler(client, message):
     if len(message.command) < 2 or not message.command[1].startswith("file_"): return
     
-    # 🚨 RULE 2: Extract link_id and group_id from deep link (e.g. file_{link_id}_{group_id})
-    cmd_parts = message.command[1].split("_")
-    link_id = cmd_parts[1]
-    
-    if len(cmd_parts) >= 3:
-        try:
-            group_id = int(cmd_parts[2])
-        except ValueError:
-            group_id = 0
-    else:
-        # Fallback agar koi galat link use kare
-        return await message.reply("❌ **Access Denied:** Invalid link format. Group ID is missing. Please search again in the group.")
-
+    link_id = message.command[1].split("file_", 1)[1]
     file_info = await db.get_file_by_link_id(link_id)
     
     if not file_info: 
         return await message.reply("❌ File not found (Deleted or Invalid).")
     
-    user_id = message.from_user.id
-    
-    # 🛑 -------------------------------------------
-    # EXACT INJECTION POINT: THE FILE INTERCEPTOR
-    # ----------------------------------------------
-    # 🚨 RULE 4: Strict Gatekeeper Implementation using group_id
-    is_verified = await check_verification(client, user_id, group_id, link_id, message)
-    if not is_verified:
-        return  # Bot stops here, file is NOT sent.
-    # ----------------------------------------------
-
-    # IF VERIFIED -> Flow continues to send file
-    await db_users.add_user(user_id, message.from_user.first_name)
+    await db_users.add_user(message.from_user.id, message.from_user.first_name)
     
     # Cleaning Name for display (Uses UPDATED clean_display_name)
     raw_name = file_info.get('file_name', 'Unknown File')
@@ -285,7 +255,7 @@ async def file_delivery_handler(client, message):
         await client.send_cached_media(
             message.from_user.id, 
             file_info['file_id'], 
-            caption=file_info.get('caption', "")
+            caption=file_info['caption'] or ""
         )
         await s_msg.delete()
     except Exception as e:
