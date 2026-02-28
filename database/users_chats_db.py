@@ -1,5 +1,4 @@
 import logging
-import time
 import motor.motor_asyncio
 from info import MONGO_URI, DATABASE_NAME
 
@@ -85,6 +84,8 @@ class UserChatsDB:
                     "auto_delete_time": 600, # 10 Minutes
                     "welcome_enabled": True
                 }
+                # Optional: Auto-save new group to DB? 
+                # await self.add_group(chat_id) 
 
             # 3. Save to RAM Cache
             self._update_cache(chat_id, chat)
@@ -107,6 +108,7 @@ class UserChatsDB:
             )
             
             # 2. Update Cache (Write-Through)
+            # Fetch current cache or empty dict
             current_data = self._get_from_cache(chat_id) or {"id": int(chat_id)}
             current_data[setting_name] = value
             self._update_cache(chat_id, current_data)
@@ -119,76 +121,5 @@ class UserChatsDB:
     async def get_all_users(self):
         """Helper for Broadcast (No Cache needed usually)"""
         return self.col.find({})
-
-    async def is_premium(self, user_id):
-        """Check karega ki user premium hai ya nahi"""
-        user = await self.col.find_one({"id": user_id})
-        if user and user.get("premium_status", False):
-            return True
-        return False
-
-    # ==========================================
-    # 🔗 ADVANCED SHORTENER & VERIFICATION DB
-    # ==========================================
-
-    async def get_group_shortener_settings(self, chat_id):
-        """Fetch group's advanced shortener config"""
-        chat = await self.get_group_status(chat_id)
-        default_settings = {
-            "mode": "smart", # Modes: 'smart', 'together'
-            "slots": {
-                "1": {"site": "", "api": "", "time": 86400}, # Default 24h
-                "2": {"site": "", "api": "", "time": 43200}, # Default 12h
-                "3": {"site": "", "api": "", "time": 43200}  # Default 12h
-            }
-        }
-        if chat and "shortener_config" in chat:
-            # Merge defaults if some keys are missing
-            existing = chat["shortener_config"]
-            if "slots" not in existing:
-                existing["slots"] = default_settings["slots"]
-            return existing
-        return default_settings
-
-    async def update_shortener_slot(self, chat_id, slot, site, api):
-        """Update specific shortener slot (1, 2, or 3)"""
-        settings = await self.get_group_shortener_settings(chat_id)
-        if str(slot) not in settings["slots"]:
-            settings["slots"][str(slot)] = {"time": 86400}
-        settings["slots"][str(slot)]["site"] = site
-        settings["slots"][str(slot)]["api"] = api
-        # Utilizing existing cached update method!
-        await self.update_group_settings(chat_id, "shortener_config", settings)
-
-    async def update_shortener_mode(self, chat_id, mode):
-        """Update shortener mode (smart/together)"""
-        settings = await self.get_group_shortener_settings(chat_id)
-        settings["mode"] = mode
-        await self.update_group_settings(chat_id, "shortener_config", settings)
-
-    async def update_shortener_time(self, chat_id, slot, time_in_sec):
-        """Update duration for a specific slot"""
-        settings = await self.get_group_shortener_settings(chat_id)
-        if str(slot) not in settings["slots"]:
-            settings["slots"][str(slot)] = {"site": "", "api": ""}
-        settings["slots"][str(slot)]["time"] = int(time_in_sec)
-        await self.update_group_settings(chat_id, "shortener_config", settings)
-
-    # --- User Verification Status ---
-    async def get_verify_status(self, user_id, chat_id):
-        """Check user verification timestamps"""
-        user = await self.col.find_one({"id": user_id})
-        if user and "verification" in user:
-            # chat_id as string because MongoDB keys are strings
-            return user["verification"].get(str(chat_id), {})
-        return {}
-
-    async def update_verify_status(self, user_id, chat_id, level):
-        """Mark a level as verified by saving current exact timestamp"""
-        await self.col.update_one(
-            {"id": user_id},
-            {"$set": {f"verification.{chat_id}.level_{level}_time": time.time()}},
-            upsert=True
-        )
 
 db_users = UserChatsDB()
