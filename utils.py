@@ -46,6 +46,46 @@ def generate_link_id(length=8):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 # ==========================================
+# 🧹 FILE NAME CLEANER
+# ==========================================
+def clean_filename(text):
+    if not text:
+        return ""
+        
+    # 1. Invisible Characters (Zero-width) ko hatana
+    text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', text)
+    
+    # 2. Sirf wo Brackets hatana jinke andar '@' ho (e.g., [@channel], {@username}, ( @handle ))
+    text = re.sub(r'[\(\[\{][^\)\]\}]*@[^\)\]\}]*[\)\]\}]', ' ', text)
+    
+    # 3. URLs, Websites, aur Telegram handles ko hatana
+    url_pattern = r'https?://\S+|www\.\S+|\S+\.com|\S+\.in|\S+\.net|\S+\.org|t\.me/\S+|@\S+'
+    text = re.sub(url_pattern, ' ', text, flags=re.IGNORECASE)
+    
+    # 4. Spam Words ko hatana (Case-insensitive)
+    spam_words = r'\b(download|full movie|free|watch online|join)\b'
+    text = re.sub(spam_words, ' ', text, flags=re.IGNORECASE)
+    
+    # 5. Tags ko hatana (ESub, x264 wagaira)
+    tags = r'\b(esub|hc-esub|x264|x265)\b'
+    text = re.sub(tags, ' ', text, flags=re.IGNORECASE)
+    
+    # 6. Dots (.) aur Underscores (_) ko space se replace karna
+    text = re.sub(r'[._]', ' ', text)
+    
+    # 7. Emojis, Symbols aur baaki Punctuation hatana:
+    # \w (Alphanumeric), \s (Spaces) aur allow kiye gaye symbols (- : ( ) [ ] { }) ko chhodkar sab hat jayega
+    text = re.sub(r'[^\w\s\-:\(\)\[\]{}]', ' ', text)
+    
+    # 8. Tag hatne ke baad agar koi khali bracket bach jaye like "()", toh use hatana
+    text = re.sub(r'\(\s*\)|\[\s*\]|\{\s*\}', ' ', text)
+    
+    # 9. Multiple spaces ko single space mein badalna aur aage-peeche ke spaces hatana
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
+
+# ==========================================
 # 🛠️ BUTTON PARSER
 # ==========================================
 async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None, a_qual=None, a_year=None, a_size=None, a_sort=None, years=None):
