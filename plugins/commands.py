@@ -2,8 +2,6 @@ import logging
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database.users_chats_db import db_users
-from database.ia_filterdb import db               # Naya import file nikalne ke liye
-from utils import check_verification              # Naya import verification check ke liye
 from info import ADMINS 
 
 # Logger setup
@@ -16,64 +14,10 @@ START_IMG = "https://images.unsplash.com/photo-1626814026160-2237a95fc5a0?q=80&w
 
 @Client.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
-    # Agar start payload ke saath aaya hai (link se start hua hai)
+    # Agar '/start file_id' hai (File mangi hai), to ignore karo
     if len(message.command) > 1:
-        cmd = message.command[1]
-        
-        # --- 🔗 ADVANCED VERIFICATION RETURN HANDLER ---
-        if cmd.startswith("verify_"):
-            try:
-                # Format: verify_{level}_{user_id}_{group_id}_{file_id}
-                parts = cmd.split("_")
-                level = parts[1]
-                target_user_id = int(parts[2])
-                group_id = int(parts[3])  # 🚨 STRICT TARGETING: Changed from chat_id to group_id
-                file_link_id = parts[4]
-                
-                # Check ki kisi aur ne to link share nahi kiya
-                if message.from_user.id != target_user_id:
-                    return await message.reply("❌ Ye link aapke liye nahi hai. Kripya bot me dobara request karein.")
-                    
-                # Update status in DB (Current Timestamp save karega)
-                await db_users.update_verify_status(target_user_id, group_id, level)
-                
-                # Check agar next level baaki hai
-                verify_result = await check_verification(client, target_user_id, group_id, file_link_id, message)
-                
-                # Handle compatibility (Agar utils se tuple aaya ya direct boolean)
-                is_verified = verify_result[0] if isinstance(verify_result, tuple) else verify_result
-                
-                if not is_verified:
-                    # Agar tuple return hua (purana utils logic), to manually button bhejo
-                    if isinstance(verify_result, tuple):
-                        return await message.reply(
-                            f"✅ **Level {level} Verified!**\n\n⚠️ Kripya aage ki file receive karne ke liye next level verify karein.",
-                            reply_markup=verify_result[1]
-                        )
-                    # Naye utils logic ke hisab se check_verification ne pehle hi button bhej diya hoga
-                    return
-                else:
-                    # ✅ ALL DONE! Provide the File Button WITH STRICT GROUP ID
-                    bot_username = client.me.username
-                    markup = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📂 Get Your File Now", url=f"https://t.me/{bot_username}?start=file_{file_link_id}_{group_id}")]
-                    ])
-                    await message.reply(
-                        "🎉 **All Verifications Completed!** \n\nClick the button below to receive your file.", 
-                        reply_markup=markup
-                    )
-                    return
-            except Exception as e:
-                logger.error(f"Verification Error: {e}")
-                return await message.reply("❌ Invalid or Expired Verification Link.")
-                
-        # Agar 'file_' command hai to autofilter handler usko handle kar lega isliye yahan se return karo
-        if cmd.startswith("file_"):
-            return
+        return 
 
-    # =========================================================
-    # --- NORMAL START MESSAGE (Aapka Purana Logic) ---
-    # =========================================================
     user_id = message.from_user.id
     first_name = message.from_user.first_name
 
