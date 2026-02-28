@@ -1,9 +1,6 @@
 import re
 import math
-import time
-import aiohttp
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from database.users_chats_db import db_users
 
 # --- REGEX PATTERNS ---
 LANG_PATTERNS = {
@@ -51,7 +48,7 @@ def generate_link_id(length=8):
 # ==========================================
 # 🛠️ BUTTON PARSER
 # ==========================================
-async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None, a_qual=None, a_year=None, a_size=None, a_sort=None, years=None, chat_id=0):
+async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None, a_qual=None, a_year=None, a_size=None, a_sort=None, years=None):
     buttons = []
     
     def s(val): return val if val else "None"
@@ -66,11 +63,7 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
         for file in files:
             f_name = file['file_name']
             f_size = get_size(file['file_size'])
-            
-            # 🚨 RULE 2 IMPLEMENTATION: Embed chat_id (group_id) directly into the deep link
-            # Default to 0 if chat_id isn't provided (e.g., from PM search fallback)
-            f_link = f"https://t.me/{bot_username}?start=file_{file['link_id']}_{chat_id}"
-            
+            f_link = f"https://t.me/{bot_username}?start=file_{file['link_id']}"
             if len(f_name) > 30: f_name = f_name[:27] + "..."
             buttons.append([InlineKeyboardButton(f"📂 {f_name} | {f_size}", url=f_link)])
 
@@ -316,99 +309,3 @@ async def size_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
 
     buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=back_data)])
     return InlineKeyboardMarkup(buttons)
-
-
-# ==========================================
-# 🔗 ADVANCED STRICT VERIFICATION & SHORTLINK SYSTEM
-# ==========================================
-async def get_shortlink(site, api, url):
-    """Shortener API ko call karega. Fail hone par 'None' return karega taaki silent bypass na ho."""
-    try:
-        req_url = f"https://{site}/api?api={api}&url={url}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(req_url) as response:
-                data = await response.json()
-                if data.get("status") == "success" or data.get("shortenedUrl"):
-                    return data.get("shortenedUrl") or data.get("url")
-    except Exception as e:
-        print(f"Shortener API Error: {e}")
-    # 🚨 RULE 1: Return None if API fails instead of original URL
-    return None 
-
-# --- 🚦 STRICT CORE FILE INTERCEPTOR ---
-async def check_verification(client, user_id, group_id, file_link_id, message_obj=None):
-    """
-    MUST run before sending file.
-    Returns True -> File is sent (User fully verified).
-    Returns False -> Execution HALTS. Verification msg or API Error msg is sent.
-    """
-    # 🚨 RULE 3: REMOVED ALL ADMIN/PREMIUM BYPASSES. Rules apply to EVERYONE.
-
-    settings = await db_users.get_group_shortener_settings(group_id)
-    verify_status = await db_users.get_verify_status(user_id, group_id)
-    mode = settings.get("mode", "smart")
-    slots = settings.get("slots", {})
-    
-    pending_levels = []
-    bot_username = client.me.username
-    
-    # Check All 3 Levels
-    for level_str in ["1", "2", "3"]:
-        slot_data = slots.get(level_str, {})
-        site = slot_data.get("site")
-        api = slot_data.get("api")
-        duration = slot_data.get("time", 86400)
-        
-        if not site or not api: 
-            continue # Slot skipped if disabled
-            
-        last_verified_time = verify_status.get(f"level_{level_str}_time", 0)
-        
-        # Check Time Gap
-        if time.time() - last_verified_time > duration:
-            pending_levels.append({"level": level_str, "site": site, "api": api})
-
-    if not pending_levels:
-        return True # Sab levels done hain
-
-    # Generate Shortlinks & Send Message
-    buttons = []
-    if mode == "together":
-        for pending in pending_levels:
-            lvl = pending["level"]
-            deep_link = f"https://t.me/{bot_username}?start=verify_{lvl}_{user_id}_{group_id}_{file_link_id}"
-            short_link = await get_shortlink(pending["site"], pending["api"], deep_link)
-            
-            # 🚨 RULE 1: STRICT API ERROR HANDLING
-            if not short_link:
-                if message_obj:
-                    await message_obj.reply("⚠️ API Error: The URL Shortener is currently down or the API key is invalid. Please notify the Group Admins.")
-                return False # HALT EXECUTION
-                
-            buttons.append([InlineKeyboardButton(f"🔗 Verify Level {lvl}", url=short_link)])
-            
-    else: # "smart" or "dynamic" mode
-        first_pending = pending_levels[0]
-        lvl = first_pending["level"]
-        deep_link = f"https://t.me/{bot_username}?start=verify_{lvl}_{user_id}_{group_id}_{file_link_id}"
-        short_link = await get_shortlink(first_pending["site"], first_pending["api"], deep_link)
-        
-        # 🚨 RULE 1: STRICT API ERROR HANDLING
-        if not short_link:
-            if message_obj:
-                await message_obj.reply("⚠️ API Error: The URL Shortener is currently down or the API key is invalid. Please notify the Group Admins.")
-            return False # HALT EXECUTION
-            
-        buttons.append([InlineKeyboardButton(f"🔗 Unlock Level {lvl}", url=short_link)])
-    
-    buttons.append([InlineKeyboardButton("❓ How to Verify", url="https://t.me/your_tutorial_channel")])
-    markup = InlineKeyboardMarkup(buttons)
-    
-    # Message Send and Stop Execution
-    if message_obj:
-        await message_obj.reply(
-            "⚠️ **Verification Required!**\n\nIs group ke niyam ke anusaar, file lene se pehle verification complete karein.",
-            reply_markup=markup,
-            quote=True
-        )
-    return False
