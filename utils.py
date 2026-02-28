@@ -46,16 +46,22 @@ def generate_link_id(length=8):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 # ==========================================
-# 🧹 FILE NAME CLEANER
+# 🧹 FILE NAME & CAPTION CLEANER
 # ==========================================
 def clean_filename(text):
     if not text:
         return ""
         
+    # 0. Extension tak hi text rakhna (uske baad ka kachra delete karna)
+    # Ye mkv, mp4, avi aadi ko dhundhega aur uske aage ka sab kuch mita dega
+    ext_match = re.search(r'(.*?)(mkv|mp4|avi|mov|flv|wmv|zip|rar|pdf)', text, flags=re.IGNORECASE)
+    if ext_match:
+        text = ext_match.group(1) + ext_match.group(2)
+        
     # 1. Invisible Characters (Zero-width) ko hatana
     text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', text)
     
-    # 2. Sirf wo Brackets hatana jinke andar '@' ho (e.g., [@channel], {@username}, ( @handle ))
+    # 2. Sirf wo Brackets hatana jinke andar '@' ho
     text = re.sub(r'[\(\[\{][^\)\]\}]*@[^\)\]\}]*[\)\]\}]', ' ', text)
     
     # 3. URLs, Websites, aur Telegram handles ko hatana
@@ -66,21 +72,20 @@ def clean_filename(text):
     spam_words = r'\b(download|full movie|free|watch online|join)\b'
     text = re.sub(spam_words, ' ', text, flags=re.IGNORECASE)
     
-    # 5. Tags ko hatana (ESub, x264 wagaira)
+    # 5. Tags ko hatana (ESub, x264, x265)
     tags = r'\b(esub|hc-esub|x264|x265)\b'
     text = re.sub(tags, ' ', text, flags=re.IGNORECASE)
     
     # 6. Dots (.) aur Underscores (_) ko space se replace karna
     text = re.sub(r'[._]', ' ', text)
     
-    # 7. Emojis, Symbols aur baaki Punctuation hatana:
-    # \w (Alphanumeric), \s (Spaces) aur allow kiye gaye symbols (- : ( ) [ ] { }) ko chhodkar sab hat jayega
+    # 7. Emojis, Symbols aur baaki Punctuation hatana (- : ( ) [ ] { } ko chhodkar)
     text = re.sub(r'[^\w\s\-:\(\)\[\]{}]', ' ', text)
     
-    # 8. Tag hatne ke baad agar koi khali bracket bach jaye like "()", toh use hatana
+    # 8. Khali brackets bach jayein toh unko hatana
     text = re.sub(r'\(\s*\)|\[\s*\]|\{\s*\}', ' ', text)
     
-    # 9. Multiple spaces ko single space mein badalna aur aage-peeche ke spaces hatana
+    # 9. Multiple spaces ko single space mein badalna
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
