@@ -23,7 +23,7 @@ class Media:
         except: pass
 
     # =====================================================
-    # 🧠 SUPER AGGRESSIVE SEARCH (SPELLING KILLER) - UPDATED 🆕
+    # 🧠 SUPER AGGRESSIVE SEARCH (SPELLING KILLER)
     # =====================================================
     async def get_search_results(self, query, file_type=None, lang=None, quality=None, year=None, size_key=None, sort_key=None, offset=0, limit=10):
         try:
@@ -68,7 +68,7 @@ class Media:
             if and_cond: match["$and"] = and_cond
             if match: pipeline.append({"$match": match})
             
-            # --- 🆕 SORTING LOGIC (ATLAS) ---
+            # --- SORTING LOGIC (ATLAS) ---
             if sort_key and sort_key != "None":
                 if sort_key == "new": pipeline.append({"$sort": {"_id": -1}})   # Newest First
                 elif sort_key == "old": pipeline.append({"$sort": {"_id": 1}})    # Oldest First
@@ -87,13 +87,32 @@ class Media:
 
         except Exception as e:
             # 2️⃣ FALLBACK: Regex Search (Backup)
-            # Yahan bhi 'sort_key' pass kar rahe hain
             return await self.get_search_results_fallback(query, file_type, lang, quality, year, size_key, sort_key, offset, limit)
 
-    # --- FALLBACK SEARCH - UPDATED 🆕 ---
+    # --- FALLBACK SEARCH - UPDATED FOR SMART REGEX 🆕 ---
     async def get_search_results_fallback(self, query, file_type, lang, quality, year, size_key, sort_key, offset, limit):
-        regex = "".join(f"(?=.*{re.escape(w)})" for w in query.split())
-        mongo_query = {"file_name": {"$regex": regex, "$options": "i"}}
+        
+        # --- 🆕 STEP 2: Smart Regex Generation ---
+        words = query.split()
+        regex_parts = []
+        for word in words:
+            # Har character ke beech flexible spacing allow karein
+            char_pattern = r"[\s\W]*".join(list(word))
+            regex_parts.append(char_pattern)
+        
+        final_regex = r"[\s\W]*".join(regex_parts)
+        
+        # Base Match: Search in file_name, search_text, OR caption
+        base_match = {
+            "$or": [
+                {"file_name": {"$regex": final_regex, "$options": "i"}},
+                {"search_text": {"$regex": final_regex, "$options": "i"}},
+                {"caption": {"$regex": final_regex, "$options": "i"}}
+            ]
+        }
+        
+        mongo_query = {"$and": [base_match]}
+        # -----------------------------------------
 
         if file_type and file_type != "None": mongo_query["file_type"] = file_type
         
@@ -105,18 +124,22 @@ class Media:
 
         if lang and lang != "None":
              pat = LANG_PATTERNS.get(lang.capitalize())
-             if pat: mongo_query["$and"] = mongo_query.get("$and", []) + [{"$or": [{"file_name": {"$regex": pat}}, {"caption": {"$regex": pat}}]}]
+             if pat: mongo_query["$and"].append({"$or": [{"file_name": {"$regex": pat}}, {"caption": {"$regex": pat}}]})
         
         if quality and quality != "None":
             pat = QUAL_PATTERNS.get(quality, re.compile(rf'\b{quality}\b', re.IGNORECASE))
-            mongo_query["$and"] = mongo_query.get("$and", []) + [{"file_name": {"$regex": pat}}]
+            mongo_query["$and"].append({"file_name": {"$regex": pat}})
             
         if year and year != "None":
-            mongo_query["$and"] = mongo_query.get("$and", []) + [{"file_name": {"$regex": re.compile(rf'\b{year}\b')}}]
+            mongo_query["$and"].append({"file_name": {"$regex": re.compile(rf'\b{year}\b')}})
+
+        # Simplified logic if only base_match is present
+        if len(mongo_query["$and"]) == 1:
+            mongo_query = mongo_query["$and"][0]
 
         cursor = self.col.find(mongo_query)
         
-        # --- 🆕 SORTING LOGIC (CURSOR) ---
+        # --- SORTING LOGIC (CURSOR) ---
         if sort_key == "new": cursor.sort('_id', -1)
         elif sort_key == "old": cursor.sort('_id', 1)
         elif sort_key == "max": cursor.sort('file_size', -1)
@@ -139,7 +162,7 @@ class Media:
         except: return []
 
     # =====================================================
-    # 📝 UPDATED SAVE LOGIC (SMART STATUS RETURN) - NO CHANGE
+    # 📝 UPDATED SAVE LOGIC (SPACELESS GENERATION) 🆕
     # =====================================================
     async def save_file(self, message):
         """
@@ -157,10 +180,18 @@ class Media:
             if await self.col.find_one({'file_unique_id': file_info['file_unique_id']}):
                 return 'duplicate' # Pehle se DB mein hai
             
+            # --- 🆕 STEP 1: Spaceless Generation ---
+            original_name = file_info['file_name']
+            display_name = re.sub(r'\.(mkv|mp4|avi|mov|flv|wmv|zip|rar)$', '', original_name, flags=re.IGNORECASE)
+            spaceless_name = display_name.replace(" ", "").replace(".", "").replace("-", "").replace("_", "")
+            master_search_text = f"{display_name} {spaceless_name}"
+            # ---------------------------------------
+
             doc = {
                 'file_id': file_info['file_id'],
                 'file_unique_id': file_info['file_unique_id'],
                 'file_name': file_info['file_name'],
+                'search_text': master_search_text,  # 🆕 Hidden spaceless string added here
                 'file_size': file_info['file_size'],
                 'file_type': file_info['file_type'],
                 'mime_type': file_info['mime_type'],
