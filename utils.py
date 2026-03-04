@@ -53,8 +53,8 @@ def clean_filename(text):
         return ""
         
     # 0. Extension tak hi text rakhna (uske baad ka kachra delete karna)
-    # Ye mkv, mp4, avi aadi ko dhundhega aur uske aage ka sab kuch mita dega
-    ext_match = re.search(r'(.*?)(mkv|mp4|avi|mov|flv|wmv|zip|rar|pdf)', text, flags=re.IGNORECASE)
+    # Multiline captions ke liye re.DOTALL zaroori hai
+    ext_match = re.search(r'(.*?)(mkv|mp4|avi|mov|flv|wmv|zip|rar|pdf)', text, flags=re.IGNORECASE | re.DOTALL)
     if ext_match:
         text = ext_match.group(1) + ext_match.group(2)
         
@@ -85,7 +85,7 @@ def clean_filename(text):
     # 8. Khali brackets bach jayein toh unko hatana
     text = re.sub(r'\(\s*\)|\[\s*\]|\{\s*\}', ' ', text)
     
-    # 9. Multiple spaces ko single space mein badalna
+    # 9. Multiple spaces aur newlines ko single space mein badalna
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
