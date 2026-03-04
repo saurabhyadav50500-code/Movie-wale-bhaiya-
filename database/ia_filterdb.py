@@ -2,7 +2,8 @@ import logging
 import re
 from motor.motor_asyncio import AsyncIOMotorClient
 from info import MONGO_URI, DATABASE_NAME, COLLECTION_NAME
-from utils import get_file_details, generate_link_id, LANG_PATTERNS, QUAL_PATTERNS
+# 🆕 clean_filename yahan import kiya gaya hai
+from utils import get_file_details, generate_link_id, LANG_PATTERNS, QUAL_PATTERNS, clean_filename
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +163,7 @@ class Media:
         except: return []
 
     # =====================================================
-    # 📝 UPDATED SAVE LOGIC (SPACELESS GENERATION) 🆕
+    # 📝 UPDATED SAVE LOGIC (PRE-CLEANING FOR INDEXING) 🆕
     # =====================================================
     async def save_file(self, message):
         """
@@ -176,26 +177,33 @@ class Media:
             if not file_info:
                 return 'error' # Media nahi hai (Text/Emoji etc)
 
+            # --- 🆕 INDEXING SE PEHLE CLEANING KAREIN ---
+            cleaned_file_name = clean_filename(file_info['file_name'])
+            
+            raw_caption = message.caption or ""
+            cleaned_caption = clean_filename(raw_caption)
+            # ---------------------------------------------
+
             # Check Duplicate
             if await self.col.find_one({'file_unique_id': file_info['file_unique_id']}):
                 return 'duplicate' # Pehle se DB mein hai
             
-            # --- 🆕 STEP 1: Spaceless Generation ---
-            original_name = file_info['file_name']
-            display_name = re.sub(r'\.(mkv|mp4|avi|mov|flv|wmv|zip|rar)$', '', original_name, flags=re.IGNORECASE)
-            spaceless_name = display_name.replace(" ", "").replace(".", "").replace("-", "").replace("_", "")
+            # --- 🆕 Spaceless Generation on Cleaned Name ---
+            # Ab hum .mkv aadi hata kar bas naam aur uska spaceless version banayenge
+            display_name = re.sub(r'\s*(mkv|mp4|avi|mov|flv|wmv|zip|rar|pdf)$', '', cleaned_file_name, flags=re.IGNORECASE)
+            spaceless_name = display_name.replace(" ", "").replace("-", "")
             master_search_text = f"{display_name} {spaceless_name}"
             # ---------------------------------------
 
             doc = {
                 'file_id': file_info['file_id'],
                 'file_unique_id': file_info['file_unique_id'],
-                'file_name': file_info['file_name'],
-                'search_text': master_search_text,  # 🆕 Hidden spaceless string added here
+                'file_name': cleaned_file_name,     # 🆕 Cleaned File Name Save Hoga
+                'search_text': master_search_text,  # 🆕 Hidden spaceless string
                 'file_size': file_info['file_size'],
                 'file_type': file_info['file_type'],
                 'mime_type': file_info['mime_type'],
-                'caption': message.caption or "",
+                'caption': cleaned_caption,         # 🆕 Cleaned Caption Save Hoga
                 'chat_id': message.chat.id,
                 'message_id': message.id,
                 'link_id': generate_link_id()
