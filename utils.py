@@ -61,10 +61,10 @@ def clean_filename(text):
     # 1. Invisible Characters (Zero-width) ko hatana
     text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', text)
     
-    # 2. Sirf wo Brackets hatana jinke andar '@' ho
-    text = re.sub(r'[\(\[\{][^\)\]\}]*@[^\)\]\}]*[\)\]\}]', ' ', text)
+    # 2. Sirf wo Brackets hatana jinke andar @, http, https, .com, .in, ya t.me wagaira likha ho
+    text = re.sub(r'[\(\[\{][^\)\]\}]*(?:@|http|\.com|\.in|\.net|\.org|t\.me)[^\)\]\}]*[\)\]\}]', ' ', text, flags=re.IGNORECASE)
     
-    # 3. URLs, Websites, aur Telegram handles ko hatana
+    # 3. URLs, Websites, aur Telegram handles (bahar likhe hue) ko hatana
     url_pattern = r'https?://\S+|www\.\S+|\S+\.com|\S+\.in|\S+\.net|\S+\.org|t\.me/\S+|@\S+'
     text = re.sub(url_pattern, ' ', text, flags=re.IGNORECASE)
     
@@ -76,7 +76,7 @@ def clean_filename(text):
     tags = r'\b(esub|hc-esub|x264|x265)\b'
     text = re.sub(tags, ' ', text, flags=re.IGNORECASE)
     
-    # 6. Dots (.) aur Underscores (_) ko space se replace karna
+    # 6. Underscores (_) aur Dots (.) ko space se replace karna
     text = re.sub(r'[._]', ' ', text)
     
     # 7. Emojis, Symbols aur baaki Punctuation hatana (- : ( ) [ ] { } ko chhodkar)
