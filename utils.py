@@ -60,31 +60,33 @@ def standardize_tv_tags(text):
     text = re.sub(r'(?i)(?<![a-z])(?:part|vol|volume|chapter)\s*(\d+)(?![a-z])', 
                   lambda m: f"S{int(m.group(1)):02d}", text)
                   
-    # 3. Season Ranges Expansion (S01-S03, Season 1 to 3 -> S01 S02 S03)
+    # 3. Season Ranges Expansion (S01-S03, Season (1-3) -> S01 S02 S03)
     def expand_season_range(match):
         start, end = int(match.group(1)), int(match.group(2))
         if start < end and (end - start) <= 20:
             return " ".join([f"S{i:02d}" for i in range(start, end + 1)])
         return match.group(0)
 
-    text = re.sub(r'(?i)(?<![a-z])(?:s|season)\s*(\d{1,2})\s*(?:-|to)\s*(?:s|season)?\s*(\d{1,2})(?![a-z])', 
+    # Updated Regex to handle spaces and parentheses e.g. S (01-03)
+    text = re.sub(r'(?i)(?<![a-z])(?:s|season)[\s\(]*(\d{1,2})\s*(?:-|to)\s*(?:s|season)?\s*(\d{1,2})[\s\)]*(?![a-z])', 
                   expand_season_range, text)
 
-    # 4. Episode Ranges Expansion (E05-08, Ep 1 to 5, E01-E05 -> E05 E06 E07 E08)
+    # 4. Episode Ranges Expansion (E05-08, EP (01-16), Ep (1-5) -> E05 E06 E07 E08)
     def expand_episode_range(match):
         start, end = int(match.group(1)), int(match.group(2))
         if start < end and (end - start) <= 100:
             return " ".join([f"E{i:02d}" for i in range(start, end + 1)])
         return match.group(0)
 
-    text = re.sub(r'(?i)(?<![a-z])(?:e|ep|episode)\s*(\d{1,4})\s*(?:-|to)\s*(?:e|ep|episode)?\s*(\d{1,4})(?![a-z])', 
+    # 🆕 Updated Regex to accurately catch brackets and spaces e.g. EP (01-16)
+    text = re.sub(r'(?i)(?<![a-z])(?:e|ep|episode)[\s\(]*(\d{1,4})\s*(?:-|to)\s*(?:e|ep|episode)?\s*(\d{1,4})[\s\)]*(?![a-z])', 
                   expand_episode_range, text)
 
-    # 5. Fix attached S01E05 -> S01 E05 (alag karke standard banana taaki single tags theek se format ho)
+    # 5. Fix attached S01E05 -> S01 E05
     text = re.sub(r'(?i)(?<![a-z])s(\d{1,2})e(\d{1,4})(?![a-z])', 
                   lambda m: f"S{int(m.group(1)):02d} E{int(m.group(2)):02d}", text)
 
-    # 5b. Fix attached E01S01 -> S01 E01 (User search friendly)
+    # 5b. Fix attached E01S01 -> S01 E01
     text = re.sub(r'(?i)(?<![a-z])e(\d{1,4})s(\d{1,2})(?![a-z])', 
                   lambda m: f"S{int(m.group(2)):02d} E{int(m.group(1)):02d}", text)
                   
@@ -97,7 +99,6 @@ def standardize_tv_tags(text):
                   lambda m: f"S{int(m.group(1)):02d}", text)
 
     # 7. Standardize Single Episodes (E1, Ep 5, Episode 105 -> E01, E05, E105)
-    # Note: :02d format 3-digits (105) ko intact rakhega (105), aur single digit ko 0 pad karega.
     text = re.sub(r'(?i)(?<![a-z])(?:e|ep|episode)\s*(\d{1,4})(?![a-z])', 
                   lambda m: f"E{int(m.group(1)):02d}", text)
 
@@ -111,41 +112,25 @@ def clean_filename(text):
         return ""
         
     # 0. Extension tak hi text rakhna (uske baad ka kachra delete karna)
-    # Multiline captions ke liye re.DOTALL zaroori hai
     ext_match = re.search(r'(.*?)(mkv|mp4|avi|mov|flv|wmv|zip|rar|pdf)', text, flags=re.IGNORECASE | re.DOTALL)
     if ext_match:
         text = ext_match.group(1) + ext_match.group(2)
         
-    # 1. Invisible Characters (Zero-width) ko hatana
     text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', text)
-    
-    # 2. Sirf wo Brackets hatana jinke andar @, http, https, .com, .in, ya t.me wagaira likha ho
     text = re.sub(r'[\(\[\{][^\)\]\}]*(?:@|http|\.com|\.in|\.net|\.org|t\.me)[^\)\]\}]*[\)\]\}]', ' ', text, flags=re.IGNORECASE)
     
-    # 3. URLs, Websites, aur Telegram handles (bahar likhe hue) ko hatana
     url_pattern = r'https?://\S+|www\.\S+|\S+\.com|\S+\.in|\S+\.net|\S+\.org|t\.me/\S+|@\S+'
     text = re.sub(url_pattern, ' ', text, flags=re.IGNORECASE)
     
-    # 4. Spam Words ko hatana (Case-insensitive)
     spam_words = r'\b(download|full movie|free|watch online|join)\b'
     text = re.sub(spam_words, ' ', text, flags=re.IGNORECASE)
     
-    # 5. Tags ko hatana (ESub, x264, x265)
     tags = r'\b(esub|hc-esub|x264|x265)\b'
     text = re.sub(tags, ' ', text, flags=re.IGNORECASE)
     
-    # ⚠️ Yahan se standardize_tv_tags HATA DIYA GAYA HAI taaki caption break na ho.
-
-    # 6. Underscores (_) aur Dots (.) ko space se replace karna
     text = re.sub(r'[._]', ' ', text)
-    
-    # 7. Emojis, Symbols aur baaki Punctuation hatana (- : ( ) [ ] { } ko chhodkar)
     text = re.sub(r'[^\w\s\-:\(\)\[\]{}]', ' ', text)
-    
-    # 8. Khali brackets bach jayein toh unko hatana
     text = re.sub(r'\(\s*\)|\[\s*\]|\{\s*\}', ' ', text)
-    
-    # 9. Multiple spaces aur newlines ko single space mein badalna
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
@@ -190,11 +175,9 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
     # 3. LANG & QUAL BUTTONS
     lq_row = []
     
-    # 🌍 Select Language Button
     lang_label = f"{a_lang.title()} ✅" if a_lang and a_lang != "None" else "🌍 Select Language"
     lq_row.append(InlineKeyboardButton(lang_label, callback_data=f"langmenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
     
-    # 📺 Select Quality Button
     qual_label = f"{a_qual} ✅" if a_qual and a_qual != "None" else "📺 Select Quality"
     lq_row.append(InlineKeyboardButton(qual_label, callback_data=f"qualmenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
     
@@ -203,11 +186,9 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
     # 4. YEAR & SIZE BUTTONS
     ys_row = []
     
-    # 📅 Select Year Button
     year_label = f"{a_year} ✅" if a_year and a_year != "None" else "📅 Select Year"
     ys_row.append(InlineKeyboardButton(year_label, callback_data=f"yearmenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
 
-    # 💾 Select Size Button
     size_labels = {"s": "<500MB", "m": "500MB-1GB", "l": "1GB-2GB", "xl": ">2GB"}
     size_display = size_labels.get(a_size, a_size)
     size_label = f"{size_display} ✅" if a_size and a_size != "None" else "💾 Select Size"
@@ -258,7 +239,7 @@ async def lang_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
         ("english", "English"), 
         ("tamil", "Tamil"), 
         ("telugu", "Telugu"),
-        ("malayalam", "Malayalam") # Added Malayalam
+        ("malayalam", "Malayalam")
     ]
     
     row = []
@@ -266,7 +247,6 @@ async def lang_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
         is_active = (code == a_lang)
         text = f"{label} ✅" if is_active else label
         val = "None" if is_active else code
-        # Notice we pass `val` as the selected language for the callback
         base_data = f"filter_{search_id}_0_{s(a_type)}_{val}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
         row.append(InlineKeyboardButton(text, callback_data=base_data))
         
