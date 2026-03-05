@@ -52,12 +52,18 @@ def standardize_tv_tags(text):
     if not text:
         return ""
 
+    # 0. S01E01 attached ko alag karna (S01 E01) - Sabse pehle zaroori hai!
+    text = re.sub(r'(?i)\bs(\d{1,2})[\s\-]*e(\d{1,4})\b', 
+                  lambda m: f"S{int(m.group(1)):02d} E{int(m.group(2)):02d}", text)
+    text = re.sub(r'(?i)\be(\d{1,4})[\s\-]*s(\d{1,2})\b', 
+                  lambda m: f"S{int(m.group(2)):02d} E{int(m.group(1)):02d}", text)
+
     # 1. Normalize NxM format (1x05, 02x15) to S01 E05
-    text = re.sub(r'(?i)(?<![a-z])(\d{1,2})x(\d{1,4})(?![a-z])', 
+    text = re.sub(r'(?i)\b(\d{1,2})x(\d{1,4})\b', 
                   lambda m: f"S{int(m.group(1)):02d} E{int(m.group(2)):02d}", text)
                   
     # 2. Alias Normalization (Part 1, Vol 2, Chapter 3 -> S01, S02, S03)
-    text = re.sub(r'(?i)(?<![a-z])(?:part|vol|volume|chapter)\s*(\d+)(?![a-z])', 
+    text = re.sub(r'(?i)\b(?:part|vol|volume|chapter)\s*(\d+)\b', 
                   lambda m: f"S{int(m.group(1)):02d}", text)
                   
     # 3. Season Ranges Expansion (S01-S03, Season (1-3) -> S01 S02 S03)
@@ -68,10 +74,10 @@ def standardize_tv_tags(text):
         return match.group(0)
 
     # Updated Regex to handle spaces and parentheses e.g. S (01-03)
-    text = re.sub(r'(?i)(?<![a-z])(?:s|season)[\s\(]*(\d{1,2})\s*(?:-|to)\s*(?:s|season)?\s*(\d{1,2})[\s\)]*(?![a-z])', 
+    text = re.sub(r'(?i)\b(?:s|season)[\s\(]*(\d{1,2})\s*(?:-|to|~|_)\s*(?:s|season)?\s*(\d{1,2})[\s\)]*\b', 
                   expand_season_range, text)
 
-    # 4. Episode Ranges Expansion (E05-08, EP (01-16), Ep (1-5) -> E05 E06 E07 E08)
+    # 4. Episode Ranges Expansion (E01-E08, EP (01-16), Ep (1-5) -> E01 E02 E03 E04 E05 E06 E07 E08)
     def expand_episode_range(match):
         start, end = int(match.group(1)), int(match.group(2))
         if start < end and (end - start) <= 100:
@@ -79,27 +85,20 @@ def standardize_tv_tags(text):
         return match.group(0)
 
     # 🆕 Updated Regex to accurately catch brackets and spaces e.g. EP (01-16)
-    text = re.sub(r'(?i)(?<![a-z])(?:e|ep|episode)[\s\(]*(\d{1,4})\s*(?:-|to)\s*(?:e|ep|episode)?\s*(\d{1,4})[\s\)]*(?![a-z])', 
+    text = re.sub(r'(?i)\b(?:e|ep|episode)[\s\(]*(\d{1,4})\s*(?:-|to|~|_)\s*(?:e|ep|episode)?\s*(\d{1,4})[\s\)]*\b', 
                   expand_episode_range, text)
 
-    # 5. Fix attached S01E05 -> S01 E05
-    text = re.sub(r'(?i)(?<![a-z])s(\d{1,2})e(\d{1,4})(?![a-z])', 
-                  lambda m: f"S{int(m.group(1)):02d} E{int(m.group(2)):02d}", text)
-
-    # 5b. Fix attached E01S01 -> S01 E01
-    text = re.sub(r'(?i)(?<![a-z])e(\d{1,4})s(\d{1,2})(?![a-z])', 
-                  lambda m: f"S{int(m.group(2)):02d} E{int(m.group(1)):02d}", text)
-                  
-    # 5c. Convert "episode 1 season 1" or "Episode1 season 1" to S01 E01
-    text = re.sub(r'(?i)(?<![a-z])(?:e|ep|episode)\s*(\d{1,4})\s*(?:s|season)\s*(\d{1,2})(?![a-z])', 
+    # 5. Convert "episode 1 season 1" or "Episode1 season 1" to S01 E01
+    text = re.sub(r'(?i)\b(?:e|ep|episode)\s*(\d{1,4})\s*(?:s|season)\s*(\d{1,2})\b', 
                   lambda m: f"S{int(m.group(2)):02d} E{int(m.group(1)):02d}", text)
 
     # 6. Standardize Single Seasons (S1, Season 1 -> S01)
-    text = re.sub(r'(?i)(?<![a-z])(?:s|season)\s*(\d{1,2})(?![a-z])', 
+    text = re.sub(r'(?i)\b(?:s|season)\s*(\d{1,2})\b', 
                   lambda m: f"S{int(m.group(1)):02d}", text)
 
     # 7. Standardize Single Episodes (E1, Ep 5, Episode 105 -> E01, E05, E105)
-    text = re.sub(r'(?i)(?<![a-z])(?:e|ep|episode)\s*(\d{1,4})(?![a-z])', 
+    # Note: :02d format 3-digits (105) ko intact rakhega (105), aur single digit ko 0 pad karega.
+    text = re.sub(r'(?i)\b(?:e|ep|episode)\s*(\d{1,4})\b', 
                   lambda m: f"E{int(m.group(1)):02d}", text)
 
     return text
@@ -110,27 +109,46 @@ def standardize_tv_tags(text):
 def clean_filename(text):
     if not text:
         return ""
-        
-    # 0. Extension tak hi text rakhna (uske baad ka kachra delete karna)
+    
+    # 0. Dash fix (taki en-dash/em-dash problem na kare)
+    text = text.replace('–', '-').replace('—', '-')
+
+    # 1. Extension tak hi text rakhna (uske baad ka kachra delete karna)
+    # Multiline captions ke liye re.DOTALL zaroori hai
     ext_match = re.search(r'(.*?)(mkv|mp4|avi|mov|flv|wmv|zip|rar|pdf)', text, flags=re.IGNORECASE | re.DOTALL)
     if ext_match:
         text = ext_match.group(1) + ext_match.group(2)
         
+    # 2. Invisible Characters (Zero-width) ko hatana
     text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', text)
+    
+    # 3. Sirf wo Brackets hatana jinke andar @, http, https, .com, .in, ya t.me wagaira likha ho
     text = re.sub(r'[\(\[\{][^\)\]\}]*(?:@|http|\.com|\.in|\.net|\.org|t\.me)[^\)\]\}]*[\)\]\}]', ' ', text, flags=re.IGNORECASE)
     
+    # 4. URLs, Websites, aur Telegram handles (bahar likhe hue) ko hatana
     url_pattern = r'https?://\S+|www\.\S+|\S+\.com|\S+\.in|\S+\.net|\S+\.org|t\.me/\S+|@\S+'
     text = re.sub(url_pattern, ' ', text, flags=re.IGNORECASE)
     
+    # 5. Spam Words ko hatana (Case-insensitive)
     spam_words = r'\b(download|full movie|free|watch online|join)\b'
     text = re.sub(spam_words, ' ', text, flags=re.IGNORECASE)
     
+    # 6. Tags ko hatana (ESub, x264, x265)
     tags = r'\b(esub|hc-esub|x264|x265)\b'
     text = re.sub(tags, ' ', text, flags=re.IGNORECASE)
     
+    # ⚠️ Yahan se standardize_tv_tags HATA DIYA GAYA HAI taaki caption break na ho.
+
+    # 7. Underscores (_) aur Dots (.) ko space se replace karna
     text = re.sub(r'[._]', ' ', text)
+    
+    # 8. Emojis, Symbols aur baaki Punctuation hatana (- : ( ) [ ] { } ko chhodkar)
     text = re.sub(r'[^\w\s\-:\(\)\[\]{}]', ' ', text)
+    
+    # 9. Khali brackets bach jayein toh unko hatana
     text = re.sub(r'\(\s*\)|\[\s*\]|\{\s*\}', ' ', text)
+    
+    # 10. Multiple spaces aur newlines ko single space mein badalna
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
@@ -175,9 +193,11 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
     # 3. LANG & QUAL BUTTONS
     lq_row = []
     
+    # 🌍 Select Language Button
     lang_label = f"{a_lang.title()} ✅" if a_lang and a_lang != "None" else "🌍 Select Language"
     lq_row.append(InlineKeyboardButton(lang_label, callback_data=f"langmenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
     
+    # 📺 Select Quality Button
     qual_label = f"{a_qual} ✅" if a_qual and a_qual != "None" else "📺 Select Quality"
     lq_row.append(InlineKeyboardButton(qual_label, callback_data=f"qualmenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
     
@@ -186,9 +206,11 @@ async def btn_parser(search_id, files, client, offset, a_type=None, a_lang=None,
     # 4. YEAR & SIZE BUTTONS
     ys_row = []
     
+    # 📅 Select Year Button
     year_label = f"{a_year} ✅" if a_year and a_year != "None" else "📅 Select Year"
     ys_row.append(InlineKeyboardButton(year_label, callback_data=f"yearmenu_{search_id}_{offset}_{s(a_type)}_{s(a_lang)}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"))
 
+    # 💾 Select Size Button
     size_labels = {"s": "<500MB", "m": "500MB-1GB", "l": "1GB-2GB", "xl": ">2GB"}
     size_display = size_labels.get(a_size, a_size)
     size_label = f"{size_display} ✅" if a_size and a_size != "None" else "💾 Select Size"
@@ -239,7 +261,7 @@ async def lang_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
         ("english", "English"), 
         ("tamil", "Tamil"), 
         ("telugu", "Telugu"),
-        ("malayalam", "Malayalam")
+        ("malayalam", "Malayalam") # Added Malayalam
     ]
     
     row = []
@@ -247,6 +269,7 @@ async def lang_menu_buttons(search_id, offset, a_type, a_lang, a_qual, a_year, a
         is_active = (code == a_lang)
         text = f"{label} ✅" if is_active else label
         val = "None" if is_active else code
+        # Notice we pass `val` as the selected language for the callback
         base_data = f"filter_{search_id}_0_{s(a_type)}_{val}_{s(a_qual)}_{s(a_year)}_{s(a_size)}_{s(a_sort)}"
         row.append(InlineKeyboardButton(text, callback_data=base_data))
         
