@@ -2,7 +2,6 @@ import logging
 import re
 from motor.motor_asyncio import AsyncIOMotorClient
 from info import MONGO_URI, DATABASE_NAME, COLLECTION_NAME
-# 🆕 standardize_tv_tags yahan import kiya gaya hai
 from utils import get_file_details, generate_link_id, LANG_PATTERNS, QUAL_PATTERNS, clean_filename, standardize_tv_tags
 
 logger = logging.getLogger(__name__)
@@ -41,7 +40,7 @@ class Media:
                             "query": query,
                             "path": ["file_name", "caption"], 
                             "fuzzy": {
-                                "maxEdits": 0,       # 🆕 Changed to 0 to prevent E01 matching E09/S01
+                                "maxEdits": 0,       # Changed to 0 to prevent E01 matching E09/S01
                                 "prefixLength": 0,   
                                 "maxExpansions": 100 
                             }
@@ -167,7 +166,7 @@ class Media:
         except: return []
 
     # =====================================================
-    # 📝 UPDATED SAVE LOGIC (PRE-CLEANING FOR INDEXING) 🆕
+    # 📝 UPDATED SAVE LOGIC (DISPLAY VS SEARCH DECOUPLED) 🆕
     # =====================================================
     async def save_file(self, message):
         """
@@ -179,41 +178,40 @@ class Media:
         try:
             file_info = get_file_details(message)
             if not file_info:
-                return 'error' # Media nahi hai (Text/Emoji etc)
+                return 'error'
 
-            # --- 🆕 INDEXING SE PEHLE CLEANING KAREIN ---
+            # 1. Clean File Name aur Caption (Ye Original Display Format Rakhega e.g. [E05-08])
             cleaned_file_name = clean_filename(file_info['file_name'])
-            
             raw_caption = message.caption or ""
             cleaned_caption = clean_filename(raw_caption)
-            # ---------------------------------------------
 
             # Check Duplicate
             if await self.col.find_one({'file_unique_id': file_info['file_unique_id']}):
-                return 'duplicate' # Pehle se DB mein hai
+                return 'duplicate'
             
-            # --- 🆕 Spaceless Generation on Cleaned Name ---
-            # Ab hum .mkv aadi hata kar bas naam aur uska spaceless version banayenge
+            # 2. Hidden Search Text (Yahan par ranges E05 E06 E07 E08 mein expand hongi)
             display_name = re.sub(r'\s*(mkv|mp4|avi|mov|flv|wmv|zip|rar|pdf)$', '', cleaned_file_name, flags=re.IGNORECASE)
-            spaceless_name = display_name.replace(" ", "").replace("-", "")
-            master_search_text = f"{display_name} {spaceless_name}"
-            # ---------------------------------------
+            
+            # Sirf search query ke liye standardization lagayenge taaki wo accurately match ho
+            search_base = standardize_tv_tags(display_name)
+            spaceless_name = search_base.replace(" ", "").replace("-", "")
+            master_search_text = f"{search_base} {spaceless_name}"
 
             doc = {
                 'file_id': file_info['file_id'],
                 'file_unique_id': file_info['file_unique_id'],
-                'file_name': cleaned_file_name,     # 🆕 Cleaned File Name Save Hoga
-                'search_text': master_search_text,  # 🆕 Hidden spaceless string
+                'file_name': cleaned_file_name,     # 🌟 Display mein E05-08 dikhega
+                'search_text': master_search_text,  # 🌟 Par Search Engine mein E05 E06 E07 E08 aayega
                 'file_size': file_info['file_size'],
                 'file_type': file_info['file_type'],
                 'mime_type': file_info['mime_type'],
-                'caption': cleaned_caption,         # 🆕 Cleaned Caption Save Hoga
+                'caption': cleaned_caption,         # 🌟 Caption mein bhi E05-08 dikhega
                 'chat_id': message.chat.id,
                 'message_id': message.id,
                 'link_id': generate_link_id()
             }
             await self.col.insert_one(doc)
-            return 'saved' # Nayi file save hui
+            return 'saved'
         except Exception as e:
             logger.error(f"Save Error: {e}")
             return 'error'
