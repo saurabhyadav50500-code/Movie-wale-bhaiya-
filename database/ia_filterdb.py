@@ -27,11 +27,11 @@ class Media:
     # =====================================================
     async def get_search_results(self, query, file_type=None, lang=None, quality=None, year=None, size_key=None, sort_key=None, offset=0, limit=10):
         try:
-            # 🆕 1. QUERY CLEANING & STANDARDIZATION
-            # User ki extra dots/punctuation (jaise e05.......) ko hatana bina hyphen tode
-            query = re.sub(r'[^\w\s\-]', ' ', query) 
+            # 🆕 1. QUERY STANDARDIZATION & DUPLICATE REMOVAL
             query = standardize_tv_tags(query)
-            query = re.sub(r'\s+', ' ', query).strip()
+            
+            # Duplicate words ko hatai jaise ki "e05 E05 episode 5" => "E05"
+            query = " ".join(list(dict.fromkeys(query.split())))
 
             # 1️⃣ ATLAS SEARCH (High Tolerance)
             pipeline = [
@@ -99,9 +99,11 @@ class Media:
     async def get_search_results_fallback(self, query, file_type, lang, quality, year, size_key, sort_key, offset, limit):
         
         # 🆕 2. CLEAN & ORDER-INDEPENDENT SEARCH
-        query = re.sub(r'[^\w\s\-]', ' ', query) 
         query = standardize_tv_tags(query)
         words = query.split()
+        
+        # 🆕 Duplicate words hatana taaki DB par load na pade
+        words = list(dict.fromkeys(words))
         
         # Har ek word ke liye alag filter, isse words aage piche hone par bhi match hoga!
         mongo_query = {"$and": []}
