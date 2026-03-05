@@ -37,7 +37,7 @@ class Media:
                             "query": query,
                             "path": ["file_name", "caption"], 
                             "fuzzy": {
-                                "maxEdits": 2,       
+                                "maxEdits": 0,       # 🆕 Changed to 0 to prevent E01 matching E09/S01
                                 "prefixLength": 0,   
                                 "maxExpansions": 100 
                             }
