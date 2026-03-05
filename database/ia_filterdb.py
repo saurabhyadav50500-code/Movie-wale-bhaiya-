@@ -2,8 +2,8 @@ import logging
 import re
 from motor.motor_asyncio import AsyncIOMotorClient
 from info import MONGO_URI, DATABASE_NAME, COLLECTION_NAME
-# 🆕 clean_filename yahan import kiya gaya hai
-from utils import get_file_details, generate_link_id, LANG_PATTERNS, QUAL_PATTERNS, clean_filename
+# 🆕 standardize_tv_tags yahan import kiya gaya hai
+from utils import get_file_details, generate_link_id, LANG_PATTERNS, QUAL_PATTERNS, clean_filename, standardize_tv_tags
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,10 @@ class Media:
     # =====================================================
     async def get_search_results(self, query, file_type=None, lang=None, quality=None, year=None, size_key=None, sort_key=None, offset=0, limit=10):
         try:
+            # 🆕 1. QUERY STANDARDIZATION
+            # User ke likhe "episode 1 season 1" ya "e01s01" ko automatic "S01 E01" bana dega
+            query = standardize_tv_tags(query)
+
             # 1️⃣ ATLAS SEARCH (High Tolerance)
             pipeline = [
                 {
@@ -93,35 +97,33 @@ class Media:
     # --- FALLBACK SEARCH - UPDATED FOR SMART REGEX 🆕 ---
     async def get_search_results_fallback(self, query, file_type, lang, quality, year, size_key, sort_key, offset, limit):
         
-        # --- 🆕 STEP 2: Smart Regex Generation ---
+        # 🆕 2. ORDER-INDEPENDENT SEARCH
+        # Query ko fir se standardize karte hain just in case
+        query = standardize_tv_tags(query)
         words = query.split()
-        regex_parts = []
+        
+        # Har ek word ke liye alag filter, isse words aage piche hone par bhi match hoga!
+        mongo_query = {"$and": []}
+        
         for word in words:
-            # Har character ke beech flexible spacing allow karein
             char_pattern = r"[\s\W]*".join(list(word))
-            regex_parts.append(char_pattern)
-        
-        final_regex = r"[\s\W]*".join(regex_parts)
-        
-        # Base Match: Search in file_name, search_text, OR caption
-        base_match = {
-            "$or": [
-                {"file_name": {"$regex": final_regex, "$options": "i"}},
-                {"search_text": {"$regex": final_regex, "$options": "i"}},
-                {"caption": {"$regex": final_regex, "$options": "i"}}
-            ]
-        }
-        
-        mongo_query = {"$and": [base_match]}
-        # -----------------------------------------
+            mongo_query["$and"].append({
+                "$or": [
+                    {"file_name": {"$regex": char_pattern, "$options": "i"}},
+                    {"search_text": {"$regex": char_pattern, "$options": "i"}},
+                    {"caption": {"$regex": char_pattern, "$options": "i"}}
+                ]
+            })
 
-        if file_type and file_type != "None": mongo_query["file_type"] = file_type
+        if file_type and file_type != "None": mongo_query["$and"].append({"file_type": file_type})
         
         if size_key and size_key != "None":
-            if size_key == "s": mongo_query["file_size"] = {"$lt": 524288000}
-            elif size_key == "m": mongo_query["file_size"] = {"$gte": 524288000, "$lt": 1073741824}
-            elif size_key == "l": mongo_query["file_size"] = {"$gte": 1073741824, "$lt": 2147483648}
-            elif size_key == "xl": mongo_query["file_size"] = {"$gte": 2147483648}
+            size_query = {}
+            if size_key == "s": size_query = {"$lt": 524288000}
+            elif size_key == "m": size_query = {"$gte": 524288000, "$lt": 1073741824}
+            elif size_key == "l": size_query = {"$gte": 1073741824, "$lt": 2147483648}
+            elif size_key == "xl": size_query = {"$gte": 2147483648}
+            if size_query: mongo_query["$and"].append({"file_size": size_query})
 
         if lang and lang != "None":
              pat = LANG_PATTERNS.get(lang.capitalize())
@@ -134,8 +136,10 @@ class Media:
         if year and year != "None":
             mongo_query["$and"].append({"file_name": {"$regex": re.compile(rf'\b{year}\b')}})
 
-        # Simplified logic if only base_match is present
-        if len(mongo_query["$and"]) == 1:
+        # Agar $and khali reh jaye to simplify karna
+        if len(mongo_query["$and"]) == 0:
+            mongo_query = {}
+        elif len(mongo_query["$and"]) == 1:
             mongo_query = mongo_query["$and"][0]
 
         cursor = self.col.find(mongo_query)
