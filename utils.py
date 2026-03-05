@@ -84,6 +84,14 @@ def standardize_tv_tags(text):
     text = re.sub(r'(?i)(?<![a-z])s(\d{1,2})e(\d{1,4})(?![a-z])', 
                   lambda m: f"S{int(m.group(1)):02d} E{int(m.group(2)):02d}", text)
 
+    # 5b. Fix attached E01S01 -> S01 E01 (User search friendly)
+    text = re.sub(r'(?i)(?<![a-z])e(\d{1,4})s(\d{1,2})(?![a-z])', 
+                  lambda m: f"S{int(m.group(2)):02d} E{int(m.group(1)):02d}", text)
+                  
+    # 5c. Convert "episode 1 season 1" or "Episode1 season 1" to S01 E01
+    text = re.sub(r'(?i)(?<![a-z])(?:e|ep|episode)\s*(\d{1,4})\s*(?:s|season)\s*(\d{1,2})(?![a-z])', 
+                  lambda m: f"S{int(m.group(2)):02d} E{int(m.group(1)):02d}", text)
+
     # 6. Standardize Single Seasons (S1, Season 1 -> S01)
     text = re.sub(r'(?i)(?<![a-z])(?:s|season)\s*(\d{1,2})(?![a-z])', 
                   lambda m: f"S{int(m.group(1)):02d}", text)
