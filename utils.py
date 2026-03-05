@@ -46,6 +46,56 @@ def generate_link_id(length=8):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 # ==========================================
+# 📺 TV SERIES & ANIME TAG STANDARDIZATION
+# ==========================================
+def standardize_tv_tags(text):
+    if not text:
+        return ""
+
+    # 1. Normalize NxM format (1x05, 02x15) to S01 E05
+    text = re.sub(r'(?i)(?<![a-z])(\d{1,2})x(\d{1,4})(?![a-z])', 
+                  lambda m: f"S{int(m.group(1)):02d} E{int(m.group(2)):02d}", text)
+                  
+    # 2. Alias Normalization (Part 1, Vol 2, Chapter 3 -> S01, S02, S03)
+    text = re.sub(r'(?i)(?<![a-z])(?:part|vol|volume|chapter)\s*(\d+)(?![a-z])', 
+                  lambda m: f"S{int(m.group(1)):02d}", text)
+                  
+    # 3. Season Ranges Expansion (S01-S03, Season 1 to 3 -> S01 S02 S03)
+    def expand_season_range(match):
+        start, end = int(match.group(1)), int(match.group(2))
+        if start < end and (end - start) <= 20:
+            return " ".join([f"S{i:02d}" for i in range(start, end + 1)])
+        return match.group(0)
+
+    text = re.sub(r'(?i)(?<![a-z])(?:s|season)\s*(\d{1,2})\s*(?:-|to)\s*(?:s|season)?\s*(\d{1,2})(?![a-z])', 
+                  expand_season_range, text)
+
+    # 4. Episode Ranges Expansion (E05-08, Ep 1 to 5, E01-E05 -> E05 E06 E07 E08)
+    def expand_episode_range(match):
+        start, end = int(match.group(1)), int(match.group(2))
+        if start < end and (end - start) <= 100:
+            return " ".join([f"E{i:02d}" for i in range(start, end + 1)])
+        return match.group(0)
+
+    text = re.sub(r'(?i)(?<![a-z])(?:e|ep|episode)\s*(\d{1,4})\s*(?:-|to)\s*(?:e|ep|episode)?\s*(\d{1,4})(?![a-z])', 
+                  expand_episode_range, text)
+
+    # 5. Fix attached S01E05 -> S01 E05 (alag karke standard banana taaki single tags theek se format ho)
+    text = re.sub(r'(?i)(?<![a-z])s(\d{1,2})e(\d{1,4})(?![a-z])', 
+                  lambda m: f"S{int(m.group(1)):02d} E{int(m.group(2)):02d}", text)
+
+    # 6. Standardize Single Seasons (S1, Season 1 -> S01)
+    text = re.sub(r'(?i)(?<![a-z])(?:s|season)\s*(\d{1,2})(?![a-z])', 
+                  lambda m: f"S{int(m.group(1)):02d}", text)
+
+    # 7. Standardize Single Episodes (E1, Ep 5, Episode 105 -> E01, E05, E105)
+    # Note: :02d format 3-digits (105) ko intact rakhega (105), aur single digit ko 0 pad karega.
+    text = re.sub(r'(?i)(?<![a-z])(?:e|ep|episode)\s*(\d{1,4})(?![a-z])', 
+                  lambda m: f"E{int(m.group(1)):02d}", text)
+
+    return text
+
+# ==========================================
 # 🧹 FILE NAME & CAPTION CLEANER
 # ==========================================
 def clean_filename(text):
@@ -76,6 +126,9 @@ def clean_filename(text):
     tags = r'\b(esub|hc-esub|x264|x265)\b'
     text = re.sub(tags, ' ', text, flags=re.IGNORECASE)
     
+    # ---> 🆕 APPLY TV SERIES & ANIME STANDARDIZATION 🆕 <---
+    text = standardize_tv_tags(text)
+
     # 6. Underscores (_) aur Dots (.) ko space se replace karna
     text = re.sub(r'[._]', ' ', text)
     
