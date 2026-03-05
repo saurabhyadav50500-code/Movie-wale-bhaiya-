@@ -27,9 +27,11 @@ class Media:
     # =====================================================
     async def get_search_results(self, query, file_type=None, lang=None, quality=None, year=None, size_key=None, sort_key=None, offset=0, limit=10):
         try:
-            # 🆕 1. QUERY STANDARDIZATION
-            # User ke likhe "episode 1 season 1" ya "e01s01" ko automatic "S01 E01" bana dega
+            # 🆕 1. QUERY CLEANING & STANDARDIZATION
+            # User ki extra dots/punctuation (jaise e05.......) ko hatana bina hyphen tode
+            query = re.sub(r'[^\w\s\-]', ' ', query) 
             query = standardize_tv_tags(query)
+            query = re.sub(r'\s+', ' ', query).strip()
 
             # 1️⃣ ATLAS SEARCH (High Tolerance)
             pipeline = [
@@ -38,9 +40,9 @@ class Media:
                         "index": "default",
                         "text": {
                             "query": query,
-                            "path": ["file_name", "caption"], 
+                            "path": ["file_name", "caption", "search_text"], # 🌟 search_text added
                             "fuzzy": {
-                                "maxEdits": 0,       # Changed to 0 to prevent E01 matching E09/S01
+                                "maxEdits": 0,       
                                 "prefixLength": 0,   
                                 "maxExpansions": 100 
                             }
@@ -96,8 +98,8 @@ class Media:
     # --- FALLBACK SEARCH - UPDATED FOR SMART REGEX 🆕 ---
     async def get_search_results_fallback(self, query, file_type, lang, quality, year, size_key, sort_key, offset, limit):
         
-        # 🆕 2. ORDER-INDEPENDENT SEARCH
-        # Query ko fir se standardize karte hain just in case
+        # 🆕 2. CLEAN & ORDER-INDEPENDENT SEARCH
+        query = re.sub(r'[^\w\s\-]', ' ', query) 
         query = standardize_tv_tags(query)
         words = query.split()
         
@@ -170,17 +172,14 @@ class Media:
     # =====================================================
     async def save_file(self, message):
         """
-        Returns:
-        - 'saved': File successfully saved.
-        - 'duplicate': File already exists.
-        - 'error': Not a valid media file or error occurred.
+        Returns: 'saved', 'duplicate', or 'error'
         """
         try:
             file_info = get_file_details(message)
             if not file_info:
                 return 'error'
 
-            # 1. Clean File Name aur Caption (Ye Original Display Format Rakhega e.g. [E05-08])
+            # 1. Clean File Name aur Caption (Ye Original Display Format Rakhega e.g. [E01-08])
             cleaned_file_name = clean_filename(file_info['file_name'])
             raw_caption = message.caption or ""
             cleaned_caption = clean_filename(raw_caption)
@@ -189,7 +188,7 @@ class Media:
             if await self.col.find_one({'file_unique_id': file_info['file_unique_id']}):
                 return 'duplicate'
             
-            # 2. Hidden Search Text (Yahan par ranges E05 E06 E07 E08 mein expand hongi)
+            # 2. Hidden Search Text (Yahan par ranges E01 E02 E03 E04... mein expand hongi)
             display_name = re.sub(r'\s*(mkv|mp4|avi|mov|flv|wmv|zip|rar|pdf)$', '', cleaned_file_name, flags=re.IGNORECASE)
             
             # Sirf search query ke liye standardization lagayenge taaki wo accurately match ho
@@ -200,12 +199,12 @@ class Media:
             doc = {
                 'file_id': file_info['file_id'],
                 'file_unique_id': file_info['file_unique_id'],
-                'file_name': cleaned_file_name,     # 🌟 Display mein E05-08 dikhega
-                'search_text': master_search_text,  # 🌟 Par Search Engine mein E05 E06 E07 E08 aayega
+                'file_name': cleaned_file_name,     # 🌟 Display mein E01-08 dikhega
+                'search_text': master_search_text,  # 🌟 Par Search Engine mein E01 E02 aayega
                 'file_size': file_info['file_size'],
                 'file_type': file_info['file_type'],
                 'mime_type': file_info['mime_type'],
-                'caption': cleaned_caption,         # 🌟 Caption mein bhi E05-08 dikhega
+                'caption': cleaned_caption,         # 🌟 Caption mein bhi E01-08 dikhega
                 'chat_id': message.chat.id,
                 'message_id': message.id,
                 'link_id': generate_link_id()
