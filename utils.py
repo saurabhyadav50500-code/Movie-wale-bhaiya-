@@ -46,7 +46,7 @@ def generate_link_id(length=8):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 # ==========================================
-# 📺 TV SERIES & ANIME TAG STANDARDIZATION
+# 📺 TV SERIES & ANIME TAG STANDARDIZATION (FOR SEARCH ONLY)
 # ==========================================
 def standardize_tv_tags(text):
     if not text:
@@ -134,8 +134,7 @@ def clean_filename(text):
     tags = r'\b(esub|hc-esub|x264|x265)\b'
     text = re.sub(tags, ' ', text, flags=re.IGNORECASE)
     
-    # ---> 🆕 APPLY TV SERIES & ANIME STANDARDIZATION 🆕 <---
-    text = standardize_tv_tags(text)
+    # ⚠️ Yahan se standardize_tv_tags HATA DIYA GAYA HAI taaki caption break na ho.
 
     # 6. Underscores (_) aur Dots (.) ko space se replace karna
     text = re.sub(r'[._]', ' ', text)
