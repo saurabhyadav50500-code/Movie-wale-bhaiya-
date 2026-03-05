@@ -245,11 +245,8 @@ async def file_delivery_handler(client, message):
     
     await db_users.add_user(message.from_user.id, message.from_user.first_name)
     
-    # Cleaning Name for display (Uses UPDATED clean_display_name)
-    raw_name = file_info.get('file_name', 'Unknown File')
-    clean_name = clean_display_name(raw_name)
-
-    s_msg = await message.reply(f"📂 **Sending:** `{clean_name}`")
+    # 🆕 Ab sirf "File sending......" likha aayega
+    s_msg = await message.reply("File sending......")
     
     try:
         await client.send_cached_media(
